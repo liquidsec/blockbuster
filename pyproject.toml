@@ -1,0 +1,20 @@
+[project]
+name = "pyoracle2"
+version = "0.1.0"
+description = "A python padding oracle vulnerability exploitation tool"
+authors = [
+    {name = "Paul Mueller"}
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "httpx (>=0.28.1,<0.29.0)",
+    "validators (>=0.35.0,<0.36.0)"
+]
+
+[project.scripts]
+pyoracle2 = "pyoracle2:main"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
