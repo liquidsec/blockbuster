@@ -1,0 +1,11 @@
+# Config files (may contain real targets/creds)
+*.ini
+!example.ini
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs
+*.log
