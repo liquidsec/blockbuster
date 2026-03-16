@@ -1,15 +1,11 @@
 """Tests for nextBlock, block retry logic, and encrypt sanity check."""
 
-import asyncio
-import base64
-import io
-import sys
 from types import SimpleNamespace
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch, AsyncMock
 
 import pytest
 
-from tests.conftest import make_job, PaddingOracle, AES_KEY, AES_IV, ORACLE
+from tests.conftest import make_job
 
 
 class TestNextBlockDecrypt:
@@ -24,8 +20,9 @@ class TestNextBlockDecrypt:
         j.blocks = [[0] * 16]
         j.iv = [0] * 16
 
-        with patch.object(j, 'decryptBlock', new_callable=AsyncMock,
-                          return_value=b"decrypted_block!"):
+        with patch.object(
+            j, "decryptBlock", new_callable=AsyncMock, return_value=b"decrypted_block!"
+        ):
             result = await j.nextBlock()
 
         assert result == 0
@@ -40,8 +37,12 @@ class TestNextBlockDecrypt:
         j.blocks = [[0] * 16]
         j.iv = [0] * 16
 
-        with patch.object(j, 'decryptBlock', new_callable=AsyncMock,
-                          side_effect=Exception("Block failed")):
+        with patch.object(
+            j,
+            "decryptBlock",
+            new_callable=AsyncMock,
+            side_effect=Exception("Block failed"),
+        ):
             result = await j.nextBlock()
 
         assert result == 1
@@ -53,7 +54,9 @@ class TestNextBlockEncrypt:
 
     @pytest.mark.asyncio
     async def test_successful_encrypt_with_passing_sanity_check(self):
-        j = make_job(mode="encrypt", oracleMode="negative", oracleText="Invalid padding")
+        j = make_job(
+            mode="encrypt", oracleMode="negative", oracleText="Invalid padding"
+        )
         j.initialize_client()
         j.blockCount = 1
         j.currentBlock = 0
@@ -65,8 +68,10 @@ class TestNextBlockEncrypt:
         def mock_request(token):
             return SimpleNamespace(text="OK", status_code=200)
 
-        with patch.object(j, 'encryptBlock', new_callable=AsyncMock, return_value=block_result):
-            with patch.object(j, 'makeRequest', side_effect=mock_request):
+        with patch.object(
+            j, "encryptBlock", new_callable=AsyncMock, return_value=block_result
+        ):
+            with patch.object(j, "makeRequest", side_effect=mock_request):
                 result = await j.nextBlock()
 
         assert result == 0
@@ -74,7 +79,9 @@ class TestNextBlockEncrypt:
 
     @pytest.mark.asyncio
     async def test_failed_sanity_check_backs_out_block(self):
-        j = make_job(mode="encrypt", oracleMode="negative", oracleText="Invalid padding")
+        j = make_job(
+            mode="encrypt", oracleMode="negative", oracleText="Invalid padding"
+        )
         j.initialize_client()
         j.blockCount = 1
         j.currentBlock = 0
@@ -87,8 +94,10 @@ class TestNextBlockEncrypt:
             # Sanity check fails — the oracle text IS found (negative mode: pass = text absent)
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
-        with patch.object(j, 'encryptBlock', new_callable=AsyncMock, return_value=block_result):
-            with patch.object(j, 'makeRequest', side_effect=mock_request):
+        with patch.object(
+            j, "encryptBlock", new_callable=AsyncMock, return_value=block_result
+        ):
+            with patch.object(j, "makeRequest", side_effect=mock_request):
                 result = await j.nextBlock()
 
         assert result == 1
@@ -103,8 +112,12 @@ class TestNextBlockEncrypt:
         j.blocks = [[0] * 16]
         j.iv = [0] * 16
 
-        with patch.object(j, 'encryptBlock', new_callable=AsyncMock,
-                          side_effect=Exception("Encrypt failed")):
+        with patch.object(
+            j,
+            "encryptBlock",
+            new_callable=AsyncMock,
+            side_effect=Exception("Encrypt failed"),
+        ):
             result = await j.nextBlock()
 
         assert result == 1
@@ -136,8 +149,8 @@ class TestBlockRetryLogic:
         max_block_retries = 3
         block_failures = 0
 
-        with patch.object(j, 'nextBlock', side_effect=mock_next_block):
-            with patch('blockbuster.blockbuster.saveState'):
+        with patch.object(j, "nextBlock", side_effect=mock_next_block):
+            with patch("blockbuster.blockbuster.saveState"):
                 while j.currentBlock < j.blockCount:
                     result = await j.nextBlock()
                     if result == 0:
@@ -167,7 +180,7 @@ class TestBlockRetryLogic:
         max_block_retries = 3
         block_failures = 0
 
-        with patch.object(j, 'nextBlock', side_effect=always_fail):
+        with patch.object(j, "nextBlock", side_effect=always_fail):
             while j.currentBlock < j.blockCount:
                 result = await j.nextBlock()
                 if result == 0:
@@ -188,8 +201,13 @@ class TestNextBlockEncryptKnownIV:
     @pytest.mark.asyncio
     async def test_encrypt_knowniv_appends_iv(self):
         iv = list(range(16))
-        j = make_job(mode="encrypt", oracleMode="negative", oracleText="Invalid padding",
-                     ivMode="knownIV", iv=iv)
+        j = make_job(
+            mode="encrypt",
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            ivMode="knownIV",
+            iv=iv,
+        )
         j.initialize_client()
         j.blockCount = 1
         j.currentBlock = 0
@@ -202,8 +220,10 @@ class TestNextBlockEncryptKnownIV:
             captured_tokens.append(token)
             return SimpleNamespace(text="OK", status_code=200)
 
-        with patch.object(j, 'encryptBlock', new_callable=AsyncMock, return_value=block_result):
-            with patch.object(j, 'makeRequest', side_effect=mock_request):
+        with patch.object(
+            j, "encryptBlock", new_callable=AsyncMock, return_value=block_result
+        ):
+            with patch.object(j, "makeRequest", side_effect=mock_request):
                 result = await j.nextBlock()
 
         assert result == 0

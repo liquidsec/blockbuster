@@ -10,7 +10,7 @@ import base64
 import io
 import sys
 from types import SimpleNamespace
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch, AsyncMock
 
 import pytest
 from Crypto.Cipher import AES
@@ -21,6 +21,7 @@ from tests.conftest import make_job, PaddingOracle, AES_KEY, AES_IV, ORACLE
 # ---------------------------------------------------------------------------
 # Helpers: compute expected intermediate values for known key
 # ---------------------------------------------------------------------------
+
 
 def aes_decrypt_block(key: bytes, block: bytes) -> bytes:
     """Raw AES block decryption (ECB, single block) — this is the 'intermediate' value."""
@@ -42,6 +43,7 @@ def compute_count_for_byte(intermediate_val: int, padding_num: int) -> int:
 # fakeIV
 # ---------------------------------------------------------------------------
 
+
 class TestFakeIV:
     def test_blocksize_16(self):
         j = make_job(blocksize=16)
@@ -55,6 +57,7 @@ class TestFakeIV:
 # ---------------------------------------------------------------------------
 # _testByteValue
 # ---------------------------------------------------------------------------
+
 
 class TestTestByteValue:
     """Test the core byte-testing function with a deterministic oracle."""
@@ -92,8 +95,11 @@ class TestTestByteValue:
         found_event = asyncio.Event()
         progress = [0, 0]
 
-        with patch.object(j, 'makeRequestAsync',
-                          side_effect=self._make_oracle_func(correct_count, currentbyte)):
+        with patch.object(
+            j,
+            "makeRequestAsync",
+            side_effect=self._make_oracle_func(correct_count, currentbyte),
+        ):
             result = await j._testByteValue(
                 count=correct_count,
                 padding_array_template=[0] * 16,
@@ -121,7 +127,7 @@ class TestTestByteValue:
         async def always_fail(token, progress=None):
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
-        with patch.object(j, 'makeRequestAsync', side_effect=always_fail):
+        with patch.object(j, "makeRequestAsync", side_effect=always_fail):
             result = await j._testByteValue(
                 count=99,
                 padding_array_template=[0] * 16,
@@ -147,11 +153,17 @@ class TestTestByteValue:
         progress = [0, 0]
 
         # Should not even call makeRequestAsync
-        with patch.object(j, 'makeRequestAsync', new_callable=AsyncMock) as mock_req:
+        with patch.object(j, "makeRequestAsync", new_callable=AsyncMock) as mock_req:
             result = await j._testByteValue(
-                count=0, padding_array_template=[0] * 16, currentbyte=15,
-                padding_num=1, solved_intermediates={}, block_data=[0] * 16,
-                is_encrypt=False, found_event=found_event, progress=progress,
+                count=0,
+                padding_array_template=[0] * 16,
+                currentbyte=15,
+                padding_num=1,
+                solved_intermediates={},
+                block_data=[0] * 16,
+                is_encrypt=False,
+                found_event=found_event,
+                progress=progress,
             )
 
         assert result is None
@@ -159,8 +171,12 @@ class TestTestByteValue:
 
     @pytest.mark.asyncio
     async def test_confirmation_rejects_false_positive(self):
-        j = make_job(oracleMode="negative", oracleText="Invalid padding",
-                     confirmations=2, concurrency=5)
+        j = make_job(
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            confirmations=2,
+            concurrency=5,
+        )
         j.initialize_client()
 
         call_count = 0
@@ -178,11 +194,17 @@ class TestTestByteValue:
         found_event = asyncio.Event()
         progress = [0, 0]
 
-        with patch.object(j, 'makeRequestAsync', side_effect=flaky_oracle):
+        with patch.object(j, "makeRequestAsync", side_effect=flaky_oracle):
             result = await j._testByteValue(
-                count=42, padding_array_template=[0] * 16, currentbyte=15,
-                padding_num=1, solved_intermediates={}, block_data=[0] * 16,
-                is_encrypt=False, found_event=found_event, progress=progress,
+                count=42,
+                padding_array_template=[0] * 16,
+                currentbyte=15,
+                padding_num=1,
+                solved_intermediates={},
+                block_data=[0] * 16,
+                is_encrypt=False,
+                found_event=found_event,
+                progress=progress,
             )
 
         assert result is None  # Rejected due to failed confirmation
@@ -206,11 +228,16 @@ class TestTestByteValue:
         found_event = asyncio.Event()
         progress = [0, 0]
 
-        with patch.object(j, 'makeRequestAsync', side_effect=capture_request):
+        with patch.object(j, "makeRequestAsync", side_effect=capture_request):
             await j._testByteValue(
-                count=0x10, padding_array_template=[0] * 16, currentbyte=14,
-                padding_num=padding_num, solved_intermediates=solved_intermediates,
-                block_data=[0] * 16, is_encrypt=False, found_event=found_event,
+                count=0x10,
+                padding_array_template=[0] * 16,
+                currentbyte=14,
+                padding_num=padding_num,
+                solved_intermediates=solved_intermediates,
+                block_data=[0] * 16,
+                is_encrypt=False,
+                found_event=found_event,
                 progress=progress,
             )
 
@@ -227,12 +254,15 @@ class TestTestByteValue:
 # solveByteAsync / solveByteSync
 # ---------------------------------------------------------------------------
 
+
 class TestSolveByteAsync:
     """Test async byte solving with a simulated oracle."""
 
     @pytest.mark.asyncio
     async def test_finds_correct_value(self):
-        j = make_job(oracleMode="negative", oracleText="Invalid padding", concurrency=256)
+        j = make_job(
+            oracleMode="negative", oracleText="Invalid padding", concurrency=256
+        )
         j.initialize_client()
 
         correct_intermediate = 0xAB
@@ -246,10 +276,13 @@ class TestSolveByteAsync:
                 return SimpleNamespace(text="OK", status_code=200)
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
-        with patch.object(j, 'makeRequestAsync', side_effect=mock_request):
+        with patch.object(j, "makeRequestAsync", side_effect=mock_request):
             result = await j.solveByteAsync(
-                currentbyte=15, padding_num=padding_num,
-                solved_intermediates={}, block_data=[0] * 16, is_encrypt=False,
+                currentbyte=15,
+                padding_num=padding_num,
+                solved_intermediates={},
+                block_data=[0] * 16,
+                is_encrypt=False,
             )
 
         assert result is not None
@@ -259,16 +292,21 @@ class TestSolveByteAsync:
 
     @pytest.mark.asyncio
     async def test_returns_none_when_no_match(self):
-        j = make_job(oracleMode="negative", oracleText="Invalid padding", concurrency=256)
+        j = make_job(
+            oracleMode="negative", oracleText="Invalid padding", concurrency=256
+        )
         j.initialize_client()
 
         async def always_fail(token, progress=None):
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
-        with patch.object(j, 'makeRequestAsync', side_effect=always_fail):
+        with patch.object(j, "makeRequestAsync", side_effect=always_fail):
             result = await j.solveByteAsync(
-                currentbyte=15, padding_num=1,
-                solved_intermediates={}, block_data=[0] * 16, is_encrypt=False,
+                currentbyte=15,
+                padding_num=1,
+                solved_intermediates={},
+                block_data=[0] * 16,
+                is_encrypt=False,
             )
 
         assert result is None
@@ -292,10 +330,13 @@ class TestSolveByteSync:
                 return SimpleNamespace(text="OK", status_code=200)
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
-        with patch.object(j, 'makeRequest', side_effect=mock_request):
+        with patch.object(j, "makeRequest", side_effect=mock_request):
             result = j.solveByteSync(
-                currentbyte=15, padding_num=padding_num,
-                solved_intermediates={}, block_data=[0] * 16, is_encrypt=False,
+                currentbyte=15,
+                padding_num=padding_num,
+                solved_intermediates={},
+                block_data=[0] * 16,
+                is_encrypt=False,
             )
 
         assert result is not None
@@ -319,10 +360,13 @@ class TestSolveByteSync:
                 return SimpleNamespace(text="OK", status_code=200)
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
-        with patch.object(j, 'makeRequest', side_effect=mock_request):
+        with patch.object(j, "makeRequest", side_effect=mock_request):
             result = j.solveByteSync(
-                currentbyte=15, padding_num=1,
-                solved_intermediates={}, block_data=[0] * 16, is_encrypt=False,
+                currentbyte=15,
+                padding_num=1,
+                solved_intermediates={},
+                block_data=[0] * 16,
+                is_encrypt=False,
             )
 
         assert result is not None
@@ -330,8 +374,12 @@ class TestSolveByteSync:
         assert call_count == correct_count + 1
 
     def test_sync_confirmation_rejects_false_positive(self):
-        j = make_job(oracleMode="negative", oracleText="Invalid padding",
-                     concurrency=1, confirmations=2)
+        j = make_job(
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            concurrency=1,
+            confirmations=2,
+        )
         j.initialize_client()
 
         # Count=5 passes initially but fails confirmation, count=10 passes all
@@ -353,10 +401,13 @@ class TestSolveByteSync:
                 return SimpleNamespace(text="OK", status_code=200)
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
-        with patch.object(j, 'makeRequest', side_effect=mock_request):
+        with patch.object(j, "makeRequest", side_effect=mock_request):
             result = j.solveByteSync(
-                currentbyte=15, padding_num=1,
-                solved_intermediates={}, block_data=[0] * 16, is_encrypt=False,
+                currentbyte=15,
+                padding_num=1,
+                solved_intermediates={},
+                block_data=[0] * 16,
+                is_encrypt=False,
             )
 
         assert result is not None
@@ -371,9 +422,9 @@ class TestSolveByteDispatch:
         j = make_job(concurrency=1)
         j.initialize_client()
 
-        with patch.object(j, 'solveByteSync', return_value=(42, None)) as mock_sync:
-            with patch.object(j, 'solveByteAsync') as mock_async:
-                result = await j.solveByte(15, 1, {}, [0]*16, False)
+        with patch.object(j, "solveByteSync", return_value=(42, None)) as mock_sync:
+            with patch.object(j, "solveByteAsync") as mock_async:
+                result = await j.solveByte(15, 1, {}, [0] * 16, False)
 
         mock_sync.assert_called_once()
         mock_async.assert_not_called()
@@ -384,10 +435,11 @@ class TestSolveByteDispatch:
         j = make_job(concurrency=10)
         j.initialize_client()
 
-        with patch.object(j, 'solveByteSync') as mock_sync:
-            with patch.object(j, 'solveByteAsync', new_callable=AsyncMock,
-                              return_value=(42, None)) as mock_async:
-                result = await j.solveByte(15, 1, {}, [0]*16, False)
+        with patch.object(j, "solveByteSync") as mock_sync:
+            with patch.object(
+                j, "solveByteAsync", new_callable=AsyncMock, return_value=(42, None)
+            ) as mock_async:
+                await j.solveByte(15, 1, {}, [0] * 16, False)
 
         mock_async.assert_called_once()
         mock_sync.assert_not_called()
@@ -397,6 +449,7 @@ class TestSolveByteDispatch:
 # _verifyIntermediate
 # ---------------------------------------------------------------------------
 
+
 class TestVerifyIntermediate:
     def test_correct_value_passes(self):
         j = make_job(oracleMode="negative", oracleText="Invalid padding")
@@ -405,8 +458,8 @@ class TestVerifyIntermediate:
         def mock_request(token):
             return SimpleNamespace(text="OK", status_code=200)
 
-        with patch.object(j, 'makeRequest', side_effect=mock_request):
-            assert j._verifyIntermediate(15, 0x42, 1, {}, [0]*16, False) is True
+        with patch.object(j, "makeRequest", side_effect=mock_request):
+            assert j._verifyIntermediate(15, 0x42, 1, {}, [0] * 16, False) is True
 
     def test_wrong_value_fails(self):
         j = make_job(oracleMode="negative", oracleText="Invalid padding")
@@ -415,13 +468,14 @@ class TestVerifyIntermediate:
         def mock_request(token):
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
-        with patch.object(j, 'makeRequest', side_effect=mock_request):
-            assert j._verifyIntermediate(15, 0x42, 1, {}, [0]*16, False) is False
+        with patch.object(j, "makeRequest", side_effect=mock_request):
+            assert j._verifyIntermediate(15, 0x42, 1, {}, [0] * 16, False) is False
 
 
 # ---------------------------------------------------------------------------
 # Mathematical correctness: full block decrypt with known key
 # ---------------------------------------------------------------------------
+
 
 class TestDecryptBlockMath:
     """Test that decryptBlock recovers correct plaintext using a mock oracle
@@ -432,17 +486,18 @@ class TestDecryptBlockMath:
         """Decrypt one block of known AES-CBC ciphertext, verifying the math end-to-end."""
         plaintext = b"Hello World!!!!!"
         ct_with_iv = ORACLE.encrypt(plaintext)
-        iv = list(ct_with_iv[:16])
+        list(ct_with_iv[:16])
         ct_block = list(ct_with_iv[16:32])  # First (and only non-padding) ct block
 
         # Compute the real intermediate value
-        intermediates = compute_intermediates(AES_KEY, bytes(ct_block))
+        compute_intermediates(AES_KEY, bytes(ct_block))
 
         # Build a mock oracle that checks padding validity using actual AES
         oracle = PaddingOracle(AES_KEY, AES_IV, 16)
 
         def mock_oracle_request(token, progress=None):
             import urllib.parse
+
             raw = urllib.parse.unquote_plus(token)
             raw += "=" * (len(raw) % 4)
             ct_bytes = base64.b64decode(raw)
@@ -453,9 +508,16 @@ class TestDecryptBlockMath:
 
         # Create job with the ciphertext
         source = base64.b64encode(ct_with_iv).decode()
-        j = make_job(sourceString=source, mode="decrypt", ivMode="firstblock",
-                     oracleMode="negative", oracleText="Invalid padding",
-                     concurrency=1, blocksize=16, encodingMode="base64")
+        j = make_job(
+            sourceString=source,
+            mode="decrypt",
+            ivMode="firstblock",
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            concurrency=1,
+            blocksize=16,
+            encodingMode="base64",
+        )
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
         try:
@@ -464,8 +526,8 @@ class TestDecryptBlockMath:
             sys.stdout = old_stdout
         j.initialize_client()
 
-        with patch.object(j, 'makeRequest', side_effect=mock_oracle_request):
-            with patch('blockbuster.blockbuster.saveState'):
+        with patch.object(j, "makeRequest", side_effect=mock_oracle_request):
+            with patch("blockbuster.blockbuster.saveState"):
                 result = await j.decryptBlock()
 
         # The decrypted block should be the first 16 bytes of the padded plaintext
@@ -485,9 +547,16 @@ class TestEncryptBlockMath:
         oracle = PaddingOracle(AES_KEY, AES_IV, 16)
 
         # We want to encrypt "AAAA" (4 bytes) — will be padded to 16 bytes
-        j = make_job(sourceString="AAAA", mode="encrypt", ivMode="firstblock",
-                     oracleMode="negative", oracleText="Invalid padding",
-                     concurrency=1, blocksize=16, encodingMode="base64")
+        j = make_job(
+            sourceString="AAAA",
+            mode="encrypt",
+            ivMode="firstblock",
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            concurrency=1,
+            blocksize=16,
+            encodingMode="base64",
+        )
 
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
@@ -499,6 +568,7 @@ class TestEncryptBlockMath:
 
         def mock_oracle_request(token, progress=None):
             import urllib.parse
+
             raw = urllib.parse.unquote_plus(token) if isinstance(token, str) else token
             if isinstance(raw, str):
                 raw += "=" * (len(raw) % 4)
@@ -510,8 +580,8 @@ class TestEncryptBlockMath:
                 return SimpleNamespace(text="OK", status_code=200)
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
-        with patch.object(j, 'makeRequest', side_effect=mock_oracle_request):
-            with patch('blockbuster.blockbuster.saveState'):
+        with patch.object(j, "makeRequest", side_effect=mock_oracle_request):
+            with patch("blockbuster.blockbuster.saveState"):
                 result = await j.encryptBlock()
 
         # Result should be blocksize bytes of ciphertext
@@ -521,6 +591,7 @@ class TestEncryptBlockMath:
 # ---------------------------------------------------------------------------
 # Decrypt/Encrypt block resume from saved byte-level progress
 # ---------------------------------------------------------------------------
+
 
 class TestDecryptBlockResume:
     """Test resuming decryptBlock from saved byte-level state."""
@@ -532,9 +603,16 @@ class TestDecryptBlockResume:
         ct_with_iv = ORACLE.encrypt(plaintext)
         source = base64.b64encode(ct_with_iv).decode()
 
-        j = make_job(sourceString=source, mode="decrypt", ivMode="firstblock",
-                     oracleMode="negative", oracleText="Invalid padding",
-                     concurrency=1, blocksize=16, encodingMode="base64")
+        j = make_job(
+            sourceString=source,
+            mode="decrypt",
+            ivMode="firstblock",
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            concurrency=1,
+            blocksize=16,
+            encodingMode="base64",
+        )
 
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
@@ -549,7 +627,10 @@ class TestDecryptBlockResume:
         iv = j.iv
 
         # Pre-seed bytes 15 and 14 as already solved
-        j.block_solved_intermediates = {15: intermediates_block0[15], 14: intermediates_block0[14]}
+        j.block_solved_intermediates = {
+            15: intermediates_block0[15],
+            14: intermediates_block0[14],
+        }
         j.block_solved_values = {
             15: intermediates_block0[15] ^ iv[15],
             14: intermediates_block0[14] ^ iv[14],
@@ -559,6 +640,7 @@ class TestDecryptBlockResume:
 
         def mock_oracle(token, progress=None):
             import urllib.parse
+
             raw = urllib.parse.unquote_plus(token)
             raw += "=" * (len(raw) % 4)
             ct_bytes = base64.b64decode(raw)
@@ -567,8 +649,8 @@ class TestDecryptBlockResume:
                 return SimpleNamespace(text="OK", status_code=200)
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
-        with patch.object(j, 'makeRequest', side_effect=mock_oracle):
-            with patch('blockbuster.blockbuster.saveState'):
+        with patch.object(j, "makeRequest", side_effect=mock_oracle):
+            with patch("blockbuster.blockbuster.saveState"):
                 result = await j.decryptBlock()
 
         assert result == plaintext
@@ -582,9 +664,16 @@ class TestEncryptBlockResume:
         """Pre-populate some solved bytes and resume encryption."""
         oracle = PaddingOracle(AES_KEY, AES_IV, 16)
 
-        j = make_job(sourceString="ABCD", mode="encrypt", ivMode="firstblock",
-                     oracleMode="negative", oracleText="Invalid padding",
-                     concurrency=1, blocksize=16, encodingMode="base64")
+        j = make_job(
+            sourceString="ABCD",
+            mode="encrypt",
+            ivMode="firstblock",
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            concurrency=1,
+            blocksize=16,
+            encodingMode="base64",
+        )
 
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
@@ -597,6 +686,7 @@ class TestEncryptBlockResume:
         # Do a full solve first to get intermediates for byte 15
         def mock_oracle(token, progress=None):
             import urllib.parse
+
             raw = urllib.parse.unquote_plus(token) if isinstance(token, str) else token
             if isinstance(raw, str):
                 raw += "=" * (len(raw) % 4)
@@ -610,18 +700,19 @@ class TestEncryptBlockResume:
 
         # Full solve without resume
         import copy
+
         j2 = copy.deepcopy(j)
         j2.initialize_client()
 
-        with patch.object(j2, 'makeRequest', side_effect=mock_oracle):
-            with patch('blockbuster.blockbuster.saveState'):
-                full_result = await j2.encryptBlock()
+        with patch.object(j2, "makeRequest", side_effect=mock_oracle):
+            with patch("blockbuster.blockbuster.saveState"):
+                await j2.encryptBlock()
 
         # Now test resume: pre-seed byte 15 as solved
         # We need to figure out the intermediate for byte 15
         # Run the first byte only and capture the intermediate
-        with patch.object(j, 'makeRequest', side_effect=mock_oracle):
-            with patch('blockbuster.blockbuster.saveState'):
+        with patch.object(j, "makeRequest", side_effect=mock_oracle):
+            with patch("blockbuster.blockbuster.saveState"):
                 result = await j.encryptBlock()
 
         assert len(result) == 16
@@ -630,6 +721,7 @@ class TestEncryptBlockResume:
 # ---------------------------------------------------------------------------
 # Preseeded intermediates
 # ---------------------------------------------------------------------------
+
 
 class TestPreseededIntermediates:
     """Test that preseeded_intermediates are verified and used."""
@@ -640,9 +732,16 @@ class TestPreseededIntermediates:
         ct_with_iv = ORACLE.encrypt(plaintext)
         source = base64.b64encode(ct_with_iv).decode()
 
-        j = make_job(sourceString=source, mode="decrypt", ivMode="firstblock",
-                     oracleMode="negative", oracleText="Invalid padding",
-                     concurrency=1, blocksize=16, encodingMode="base64")
+        j = make_job(
+            sourceString=source,
+            mode="decrypt",
+            ivMode="firstblock",
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            concurrency=1,
+            blocksize=16,
+            encodingMode="base64",
+        )
 
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
@@ -658,6 +757,7 @@ class TestPreseededIntermediates:
 
         def mock_oracle(token, progress=None):
             import urllib.parse
+
             raw = urllib.parse.unquote_plus(token)
             raw += "=" * (len(raw) % 4)
             ct_bytes = base64.b64decode(raw)
@@ -666,8 +766,8 @@ class TestPreseededIntermediates:
                 return SimpleNamespace(text="OK", status_code=200)
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
-        with patch.object(j, 'makeRequest', side_effect=mock_oracle):
-            with patch('blockbuster.blockbuster.saveState'):
+        with patch.object(j, "makeRequest", side_effect=mock_oracle):
+            with patch("blockbuster.blockbuster.saveState"):
                 result = await j.decryptBlock()
 
         assert result == plaintext
@@ -678,9 +778,16 @@ class TestPreseededIntermediates:
         ct_with_iv = ORACLE.encrypt(plaintext)
         source = base64.b64encode(ct_with_iv).decode()
 
-        j = make_job(sourceString=source, mode="decrypt", ivMode="firstblock",
-                     oracleMode="negative", oracleText="Invalid padding",
-                     concurrency=1, blocksize=16, encodingMode="base64")
+        j = make_job(
+            sourceString=source,
+            mode="decrypt",
+            ivMode="firstblock",
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            concurrency=1,
+            blocksize=16,
+            encodingMode="base64",
+        )
 
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
@@ -695,6 +802,7 @@ class TestPreseededIntermediates:
 
         def mock_oracle(token, progress=None):
             import urllib.parse
+
             raw = urllib.parse.unquote_plus(token)
             raw += "=" * (len(raw) % 4)
             ct_bytes = base64.b64decode(raw)
@@ -703,8 +811,8 @@ class TestPreseededIntermediates:
                 return SimpleNamespace(text="OK", status_code=200)
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
-        with patch.object(j, 'makeRequest', side_effect=mock_oracle):
-            with patch('blockbuster.blockbuster.saveState'):
+        with patch.object(j, "makeRequest", side_effect=mock_oracle):
+            with patch("blockbuster.blockbuster.saveState"):
                 result = await j.decryptBlock()
 
         # Should still get correct result via fallback
@@ -718,9 +826,16 @@ class TestEncryptPreseededIntermediates:
     async def test_correct_preseeded_encrypt(self):
         oracle = PaddingOracle(AES_KEY, AES_IV, 16)
 
-        j = make_job(sourceString="ZZZZ", mode="encrypt", ivMode="firstblock",
-                     oracleMode="negative", oracleText="Invalid padding",
-                     concurrency=1, blocksize=16, encodingMode="base64")
+        j = make_job(
+            sourceString="ZZZZ",
+            mode="encrypt",
+            ivMode="firstblock",
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            concurrency=1,
+            blocksize=16,
+            encodingMode="base64",
+        )
 
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
@@ -732,6 +847,7 @@ class TestEncryptPreseededIntermediates:
 
         def mock_oracle(token, progress=None):
             import urllib.parse
+
             raw = urllib.parse.unquote_plus(token) if isinstance(token, str) else token
             if isinstance(raw, str):
                 raw += "=" * (len(raw) % 4)
@@ -744,8 +860,8 @@ class TestEncryptPreseededIntermediates:
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
         # No preseeded values - just verify encrypt works
-        with patch.object(j, 'makeRequest', side_effect=mock_oracle):
-            with patch('blockbuster.blockbuster.saveState'):
+        with patch.object(j, "makeRequest", side_effect=mock_oracle):
+            with patch("blockbuster.blockbuster.saveState"):
                 result = await j.encryptBlock()
 
         assert len(result) == 16
@@ -755,6 +871,7 @@ class TestEncryptPreseededIntermediates:
 # Latin-1 decode fallback in decryptBlock
 # ---------------------------------------------------------------------------
 
+
 class TestDecryptBlockLatin1Fallback:
     """Test that non-UTF8 plaintext falls back to latin1 decode."""
 
@@ -763,14 +880,39 @@ class TestDecryptBlockLatin1Fallback:
         """Encrypt plaintext with bytes > 127 that aren't valid UTF-8 sequences."""
         # Use raw bytes that form valid single-block plaintext but aren't valid UTF-8
         # \x80\x81... are continuation bytes in UTF-8 without a leading byte
-        raw_plaintext = bytes([0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87,
-                               0x88, 0x89, 0x8A, 0x8B, 0x8C, 0x8D, 0x8E, 0x8F])
+        raw_plaintext = bytes(
+            [
+                0x80,
+                0x81,
+                0x82,
+                0x83,
+                0x84,
+                0x85,
+                0x86,
+                0x87,
+                0x88,
+                0x89,
+                0x8A,
+                0x8B,
+                0x8C,
+                0x8D,
+                0x8E,
+                0x8F,
+            ]
+        )
         ct_with_iv = ORACLE.encrypt(raw_plaintext)
         source = base64.b64encode(ct_with_iv).decode()
 
-        j = make_job(sourceString=source, mode="decrypt", ivMode="firstblock",
-                     oracleMode="negative", oracleText="Invalid padding",
-                     concurrency=1, blocksize=16, encodingMode="base64")
+        j = make_job(
+            sourceString=source,
+            mode="decrypt",
+            ivMode="firstblock",
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            concurrency=1,
+            blocksize=16,
+            encodingMode="base64",
+        )
 
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
@@ -782,6 +924,7 @@ class TestDecryptBlockLatin1Fallback:
 
         def mock_oracle(token, progress=None):
             import urllib.parse
+
             raw = urllib.parse.unquote_plus(token)
             raw += "=" * (len(raw) % 4)
             ct_bytes = base64.b64decode(raw)
@@ -790,8 +933,8 @@ class TestDecryptBlockLatin1Fallback:
                 return SimpleNamespace(text="OK", status_code=200)
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
-        with patch.object(j, 'makeRequest', side_effect=mock_oracle):
-            with patch('blockbuster.blockbuster.saveState'):
+        with patch.object(j, "makeRequest", side_effect=mock_oracle):
+            with patch("blockbuster.blockbuster.saveState"):
                 result = await j.decryptBlock()
 
         # The raw bytes should be recovered
@@ -801,6 +944,7 @@ class TestDecryptBlockLatin1Fallback:
 # ---------------------------------------------------------------------------
 # Debug mode in solve functions
 # ---------------------------------------------------------------------------
+
 
 class TestTestByteValueEncryptPath:
     """Test _testByteValue with is_encrypt=True (line 517)."""
@@ -819,11 +963,17 @@ class TestTestByteValueEncryptPath:
         found_event = asyncio.Event()
         progress = [0, 0]
 
-        with patch.object(j, 'makeRequestAsync', side_effect=capture_request):
+        with patch.object(j, "makeRequestAsync", side_effect=capture_request):
             result = await j._testByteValue(
-                count=0x42, padding_array_template=[0]*16, currentbyte=15,
-                padding_num=1, solved_intermediates={}, block_data=[0]*16,
-                is_encrypt=True, found_event=found_event, progress=progress,
+                count=0x42,
+                padding_array_template=[0] * 16,
+                currentbyte=15,
+                padding_num=1,
+                solved_intermediates={},
+                block_data=[0] * 16,
+                is_encrypt=True,
+                found_event=found_event,
+                progress=progress,
             )
 
         assert result is not None
@@ -847,11 +997,17 @@ class TestTestByteValueEncryptPath:
         found_event_ref = [found_event]
         progress = [0, 0]
 
-        with patch.object(j, 'makeRequestAsync', side_effect=slow_oracle):
+        with patch.object(j, "makeRequestAsync", side_effect=slow_oracle):
             result = await j._testByteValue(
-                count=0x42, padding_array_template=[0]*16, currentbyte=15,
-                padding_num=1, solved_intermediates={}, block_data=[0]*16,
-                is_encrypt=False, found_event=found_event, progress=progress,
+                count=0x42,
+                padding_array_template=[0] * 16,
+                currentbyte=15,
+                padding_num=1,
+                solved_intermediates={},
+                block_data=[0] * 16,
+                is_encrypt=False,
+                found_event=found_event,
+                progress=progress,
             )
 
         assert result is None  # Should bail because found_event was set
@@ -862,8 +1018,13 @@ class TestConfirmationDebugPaths:
 
     @pytest.mark.asyncio
     async def test_async_confirmation_debug_pass(self):
-        j = make_job(oracleMode="negative", oracleText="Invalid padding",
-                     concurrency=5, confirmations=1, debug=True)
+        j = make_job(
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            concurrency=5,
+            confirmations=1,
+            debug=True,
+        )
         j.initialize_client()
 
         async def always_pass(token, progress=None):
@@ -872,19 +1033,30 @@ class TestConfirmationDebugPaths:
         found_event = asyncio.Event()
         progress = [0, 0]
 
-        with patch.object(j, 'makeRequestAsync', side_effect=always_pass):
+        with patch.object(j, "makeRequestAsync", side_effect=always_pass):
             result = await j._testByteValue(
-                count=42, padding_array_template=[0]*16, currentbyte=15,
-                padding_num=1, solved_intermediates={}, block_data=[0]*16,
-                is_encrypt=False, found_event=found_event, progress=progress,
+                count=42,
+                padding_array_template=[0] * 16,
+                currentbyte=15,
+                padding_num=1,
+                solved_intermediates={},
+                block_data=[0] * 16,
+                is_encrypt=False,
+                found_event=found_event,
+                progress=progress,
             )
 
         assert result is not None
 
     @pytest.mark.asyncio
     async def test_async_confirmation_debug_fail(self):
-        j = make_job(oracleMode="negative", oracleText="Invalid padding",
-                     concurrency=5, confirmations=1, debug=True)
+        j = make_job(
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            concurrency=5,
+            confirmations=1,
+            debug=True,
+        )
         j.initialize_client()
 
         call_count = 0
@@ -899,11 +1071,17 @@ class TestConfirmationDebugPaths:
         found_event = asyncio.Event()
         progress = [0, 0]
 
-        with patch.object(j, 'makeRequestAsync', side_effect=pass_then_fail):
+        with patch.object(j, "makeRequestAsync", side_effect=pass_then_fail):
             result = await j._testByteValue(
-                count=42, padding_array_template=[0]*16, currentbyte=15,
-                padding_num=1, solved_intermediates={}, block_data=[0]*16,
-                is_encrypt=False, found_event=found_event, progress=progress,
+                count=42,
+                padding_array_template=[0] * 16,
+                currentbyte=15,
+                padding_num=1,
+                solved_intermediates={},
+                block_data=[0] * 16,
+                is_encrypt=False,
+                found_event=found_event,
+                progress=progress,
             )
 
         assert result is None
@@ -911,8 +1089,12 @@ class TestConfirmationDebugPaths:
     @pytest.mark.asyncio
     async def test_async_confirmation_found_event_during_confirm(self):
         """found_event set during confirmation loop (line 547)."""
-        j = make_job(oracleMode="negative", oracleText="Invalid padding",
-                     concurrency=5, confirmations=3)
+        j = make_job(
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            concurrency=5,
+            confirmations=3,
+        )
         j.initialize_client()
 
         call_count = 0
@@ -927,19 +1109,30 @@ class TestConfirmationDebugPaths:
         found_event = asyncio.Event()
         progress = [0, 0]
 
-        with patch.object(j, 'makeRequestAsync', side_effect=set_event_on_second):
+        with patch.object(j, "makeRequestAsync", side_effect=set_event_on_second):
             result = await j._testByteValue(
-                count=42, padding_array_template=[0]*16, currentbyte=15,
-                padding_num=1, solved_intermediates={}, block_data=[0]*16,
-                is_encrypt=False, found_event=found_event, progress=progress,
+                count=42,
+                padding_array_template=[0] * 16,
+                currentbyte=15,
+                padding_num=1,
+                solved_intermediates={},
+                block_data=[0] * 16,
+                is_encrypt=False,
+                found_event=found_event,
+                progress=progress,
             )
 
         assert result is None
 
     def test_sync_confirmation_debug_paths(self):
         """solveByteSync confirmation with debug=True (lines 633, 636)."""
-        j = make_job(oracleMode="negative", oracleText="Invalid padding",
-                     concurrency=1, confirmations=1, debug=True)
+        j = make_job(
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            concurrency=1,
+            confirmations=1,
+            debug=True,
+        )
         j.initialize_client()
 
         call_count_per_byte = {}
@@ -958,8 +1151,8 @@ class TestConfirmationDebugPaths:
                 return SimpleNamespace(text="OK", status_code=200)
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
-        with patch.object(j, 'makeRequest', side_effect=mock_request):
-            result = j.solveByteSync(15, 1, {}, [0]*16, False)
+        with patch.object(j, "makeRequest", side_effect=mock_request):
+            result = j.solveByteSync(15, 1, {}, [0] * 16, False)
 
         assert result is not None
         assert result[0] == 10
@@ -975,8 +1168,8 @@ class TestSolveByteSyncNoMatch:
         def always_fail(token, progress=None):
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
-        with patch.object(j, 'makeRequest', side_effect=always_fail):
-            result = j.solveByteSync(15, 1, {}, [0]*16, False)
+        with patch.object(j, "makeRequest", side_effect=always_fail):
+            result = j.solveByteSync(15, 1, {}, [0] * 16, False)
 
         assert result is None
 
@@ -991,8 +1184,8 @@ class TestVerifyIntermediateEncrypt:
         def mock_request(token):
             return SimpleNamespace(text="OK", status_code=200)
 
-        with patch.object(j, 'makeRequest', side_effect=mock_request):
-            result = j._verifyIntermediate(15, 0x42, 1, {}, [0]*16, is_encrypt=True)
+        with patch.object(j, "makeRequest", side_effect=mock_request):
+            result = j._verifyIntermediate(15, 0x42, 1, {}, [0] * 16, is_encrypt=True)
 
         assert result is True
 
@@ -1009,9 +1202,16 @@ class TestDecryptBlockUnknownIV:
         ct_only = ct_with_iv[16:]
         source = base64.b64encode(ct_only).decode()
 
-        j = make_job(sourceString=source, mode="decrypt", ivMode="unknown",
-                     oracleMode="negative", oracleText="Invalid padding",
-                     concurrency=1, blocksize=16, encodingMode="base64")
+        j = make_job(
+            sourceString=source,
+            mode="decrypt",
+            ivMode="unknown",
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            concurrency=1,
+            blocksize=16,
+            encodingMode="base64",
+        )
 
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
@@ -1023,6 +1223,7 @@ class TestDecryptBlockUnknownIV:
 
         def mock_oracle(token, progress=None):
             import urllib.parse
+
             raw = urllib.parse.unquote_plus(token)
             raw += "=" * (len(raw) % 4)
             ct_bytes = base64.b64decode(raw)
@@ -1031,8 +1232,8 @@ class TestDecryptBlockUnknownIV:
                 return SimpleNamespace(text="OK", status_code=200)
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
-        with patch.object(j, 'makeRequest', side_effect=mock_oracle):
-            with patch('blockbuster.blockbuster.saveState'):
+        with patch.object(j, "makeRequest", side_effect=mock_oracle):
+            with patch("blockbuster.blockbuster.saveState"):
                 result = await j.decryptBlock()
 
         # First block with unknown IV will be XOR'd with zeros instead of real IV
@@ -1048,9 +1249,17 @@ class TestEncryptBlockKnownIV:
         oracle = PaddingOracle(AES_KEY, AES_IV, 16)
         iv = list(AES_IV)
 
-        j = make_job(sourceString="Test", mode="encrypt", ivMode="knownIV",
-                     iv=iv, oracleMode="negative", oracleText="Invalid padding",
-                     concurrency=1, blocksize=16, encodingMode="base64")
+        j = make_job(
+            sourceString="Test",
+            mode="encrypt",
+            ivMode="knownIV",
+            iv=iv,
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            concurrency=1,
+            blocksize=16,
+            encodingMode="base64",
+        )
 
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
@@ -1062,6 +1271,7 @@ class TestEncryptBlockKnownIV:
 
         def mock_oracle(token, progress=None):
             import urllib.parse
+
             raw = urllib.parse.unquote_plus(token) if isinstance(token, str) else token
             if isinstance(raw, str):
                 raw += "=" * (len(raw) % 4)
@@ -1073,8 +1283,8 @@ class TestEncryptBlockKnownIV:
                 return SimpleNamespace(text="OK", status_code=200)
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
-        with patch.object(j, 'makeRequest', side_effect=mock_oracle):
-            with patch('blockbuster.blockbuster.saveState'):
+        with patch.object(j, "makeRequest", side_effect=mock_oracle):
+            with patch("blockbuster.blockbuster.saveState"):
                 result = await j.encryptBlock()
 
         assert len(result) == 16
@@ -1087,9 +1297,16 @@ class TestEncryptBlockPreseeded:
     async def test_correct_preseeded_encrypt_skips_byte(self):
         oracle = PaddingOracle(AES_KEY, AES_IV, 16)
 
-        j = make_job(sourceString="ZZZZ", mode="encrypt", ivMode="firstblock",
-                     oracleMode="negative", oracleText="Invalid padding",
-                     concurrency=1, blocksize=16, encodingMode="base64")
+        j = make_job(
+            sourceString="ZZZZ",
+            mode="encrypt",
+            ivMode="firstblock",
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            concurrency=1,
+            blocksize=16,
+            encodingMode="base64",
+        )
 
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
@@ -1101,6 +1318,7 @@ class TestEncryptBlockPreseeded:
 
         def mock_oracle(token, progress=None):
             import urllib.parse
+
             raw = urllib.parse.unquote_plus(token) if isinstance(token, str) else token
             if isinstance(raw, str):
                 raw += "=" * (len(raw) % 4)
@@ -1114,12 +1332,13 @@ class TestEncryptBlockPreseeded:
 
         # First do a full solve to find the real intermediate for byte 15
         import copy
+
         j2 = copy.deepcopy(j)
         j2.initialize_client()
 
-        with patch.object(j2, 'makeRequest', side_effect=mock_oracle):
-            with patch('blockbuster.blockbuster.saveState'):
-                full_result = await j2.encryptBlock()
+        with patch.object(j2, "makeRequest", side_effect=mock_oracle):
+            with patch("blockbuster.blockbuster.saveState"):
+                await j2.encryptBlock()
 
         # Now re-solve with preseeded byte 15
         # We need to discover the intermediate value
@@ -1137,8 +1356,8 @@ class TestEncryptBlockPreseeded:
         # Test with wrong value - should still produce valid result via fallback
         j.preseeded_intermediates = {15: 0x00}  # Almost certainly wrong
 
-        with patch.object(j, 'makeRequest', side_effect=mock_oracle):
-            with patch('blockbuster.blockbuster.saveState'):
+        with patch.object(j, "makeRequest", side_effect=mock_oracle):
+            with patch("blockbuster.blockbuster.saveState"):
                 result = await j.encryptBlock()
 
         assert len(result) == 16
@@ -1151,9 +1370,16 @@ class TestEncryptBlockMultiBlock:
     async def test_second_block_uses_solved_previous(self):
         oracle = PaddingOracle(AES_KEY, AES_IV, 16)
 
-        j = make_job(sourceString="A" * 17, mode="encrypt", ivMode="firstblock",
-                     oracleMode="negative", oracleText="Invalid padding",
-                     concurrency=1, blocksize=16, encodingMode="base64")
+        j = make_job(
+            sourceString="A" * 17,
+            mode="encrypt",
+            ivMode="firstblock",
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            concurrency=1,
+            blocksize=16,
+            encodingMode="base64",
+        )
 
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
@@ -1165,6 +1391,7 @@ class TestEncryptBlockMultiBlock:
 
         def mock_oracle(token, progress=None):
             import urllib.parse
+
             raw = urllib.parse.unquote_plus(token) if isinstance(token, str) else token
             if isinstance(raw, str):
                 raw += "=" * (len(raw) % 4)
@@ -1177,16 +1404,16 @@ class TestEncryptBlockMultiBlock:
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
         # Solve block 0
-        with patch.object(j, 'makeRequest', side_effect=mock_oracle):
-            with patch('blockbuster.blockbuster.saveState'):
+        with patch.object(j, "makeRequest", side_effect=mock_oracle):
+            with patch("blockbuster.blockbuster.saveState"):
                 result0 = await j.encryptBlock()
 
         j.solvedBlocks[0] = result0
         j.currentBlock = 1
 
         # Solve block 1 — uses solvedBlocks[0] as previousBlock
-        with patch.object(j, 'makeRequest', side_effect=mock_oracle):
-            with patch('blockbuster.blockbuster.saveState'):
+        with patch.object(j, "makeRequest", side_effect=mock_oracle):
+            with patch("blockbuster.blockbuster.saveState"):
                 result1 = await j.encryptBlock()
 
         assert len(result1) == 16
@@ -1197,8 +1424,12 @@ class TestDebugSolving:
 
     @pytest.mark.asyncio
     async def test_solve_byte_sync_debug(self):
-        j = make_job(oracleMode="negative", oracleText="Invalid padding",
-                     concurrency=1, debug=True)
+        j = make_job(
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            concurrency=1,
+            debug=True,
+        )
         j.initialize_client()
 
         correct_count = 0x55 ^ 1
@@ -1210,8 +1441,8 @@ class TestDebugSolving:
                 return SimpleNamespace(text="OK", status_code=200)
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
-        with patch.object(j, 'makeRequest', side_effect=mock_request):
-            result = j.solveByteSync(15, 1, {}, [0]*16, False)
+        with patch.object(j, "makeRequest", side_effect=mock_request):
+            result = j.solveByteSync(15, 1, {}, [0] * 16, False)
 
         assert result is not None
         assert result[0] == correct_count
@@ -1219,8 +1450,13 @@ class TestDebugSolving:
     @pytest.mark.asyncio
     async def test_test_byte_value_debug(self):
         import asyncio
-        j = make_job(oracleMode="negative", oracleText="Invalid padding",
-                     concurrency=5, debug=True)
+
+        j = make_job(
+            oracleMode="negative",
+            oracleText="Invalid padding",
+            concurrency=5,
+            debug=True,
+        )
         j.initialize_client()
 
         async def mock_request(token, progress=None):
@@ -1229,11 +1465,17 @@ class TestDebugSolving:
         found_event = asyncio.Event()
         progress = [0, 0]
 
-        with patch.object(j, 'makeRequestAsync', side_effect=mock_request):
+        with patch.object(j, "makeRequestAsync", side_effect=mock_request):
             result = await j._testByteValue(
-                count=42, padding_array_template=[0]*16, currentbyte=15,
-                padding_num=1, solved_intermediates={}, block_data=[0]*16,
-                is_encrypt=False, found_event=found_event, progress=progress,
+                count=42,
+                padding_array_template=[0] * 16,
+                currentbyte=15,
+                padding_num=1,
+                solved_intermediates={},
+                block_data=[0] * 16,
+                is_encrypt=False,
+                found_event=found_event,
+                progress=progress,
             )
 
         assert result is not None

@@ -3,7 +3,6 @@
 import io
 import sys
 
-import pytest
 
 from blockbuster.blockbuster import paddify
 from tests.conftest import make_job
@@ -53,8 +52,11 @@ class TestEncryptInitPadding:
 
     def _init_job(self, source_string, blocksize=16, plaintext_encoding="utf-8"):
         j = make_job(
-            sourceString=source_string, mode="encrypt", blocksize=blocksize,
-            ivMode="firstblock", plaintextEncoding=plaintext_encoding,
+            sourceString=source_string,
+            mode="encrypt",
+            blocksize=blocksize,
+            ivMode="firstblock",
+            plaintextEncoding=plaintext_encoding,
         )
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
@@ -120,7 +122,10 @@ class TestPKCS7Stripping:
     def _strip(self, combined, blocksize=16):
         """Replicate the stripping logic from async_main."""
         pad_len = combined[-1]
-        if 1 <= pad_len <= blocksize and combined[-pad_len:] == bytes([pad_len]) * pad_len:
+        if (
+            1 <= pad_len <= blocksize
+            and combined[-pad_len:] == bytes([pad_len]) * pad_len
+        ):
             return combined[:-pad_len]
         return combined
 

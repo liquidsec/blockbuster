@@ -1,9 +1,7 @@
 """Tests for pure utility functions in blockbuster."""
 
 import base64
-import os
 import pickle
-import sys
 
 import pytest
 
@@ -21,6 +19,7 @@ from blockbuster.blockbuster import (
 # ---------------------------------------------------------------------------
 # makeCookieString
 # ---------------------------------------------------------------------------
+
 
 class TestMakeCookieString:
     def test_empty_dict(self):
@@ -43,11 +42,12 @@ class TestMakeCookieString:
 # encode_multipart
 # ---------------------------------------------------------------------------
 
+
 class TestEncodeMultipart:
     def test_single_field(self):
         body, ct = encode_multipart({"name": "value"})
         assert "Content-Disposition: form-data" in body
-        assert "name=\"name\"" in body
+        assert 'name="name"' in body
         assert "value" in body
         assert "multipart/form-data; boundary=" in ct
 
@@ -59,13 +59,14 @@ class TestEncodeMultipart:
 
     def test_multiple_fields(self):
         body, _ = encode_multipart({"a": "1", "b": "2"})
-        assert "name=\"a\"" in body
-        assert "name=\"b\"" in body
+        assert 'name="a"' in body
+        assert 'name="b"' in body
 
 
 # ---------------------------------------------------------------------------
 # split_by_n
 # ---------------------------------------------------------------------------
+
 
 class TestSplitByN:
     def test_even_split(self):
@@ -93,6 +94,7 @@ class TestSplitByN:
 # ---------------------------------------------------------------------------
 # bytes_to_base64
 # ---------------------------------------------------------------------------
+
 
 class TestBytesToBase64:
     def test_known_value(self):
@@ -125,6 +127,7 @@ class TestBytesToBase64:
 # b64urlEncode
 # ---------------------------------------------------------------------------
 
+
 class TestB64urlEncode:
     def test_replaces_slash(self):
         assert b64urlEncode("abc/def") == "abc%2Fdef"
@@ -146,6 +149,7 @@ class TestB64urlEncode:
 # handleError
 # ---------------------------------------------------------------------------
 
+
 class TestHandleError:
     def test_exits_with_code_2(self):
         with pytest.raises(SystemExit) as exc_info:
@@ -163,10 +167,12 @@ class TestHandleError:
 # saveState
 # ---------------------------------------------------------------------------
 
+
 class TestSaveState:
     def _make_job(self, **overrides):
         """Create a real Job instance for saveState testing."""
         from tests.conftest import make_job
+
         j = make_job(name="testjob", **overrides)
         # Override attributes that saveState checks
         if "currentBlock" in overrides:

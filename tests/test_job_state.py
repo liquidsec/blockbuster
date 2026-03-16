@@ -1,11 +1,8 @@
 """Tests for Job serialization, state management, and pickle round-trips."""
 
-import io
 import pickle
-import sys
 from unittest.mock import patch
 
-import pytest
 
 from tests.conftest import make_job
 
@@ -82,7 +79,7 @@ class TestSaveByteProgress:
         intermediates = {15: 0x42}
         values = {15: 0x55}
 
-        with patch('blockbuster.blockbuster.saveState'):
+        with patch("blockbuster.blockbuster.saveState"):
             j._save_byte_progress(intermediates, values, 14, 2)
 
         assert j.block_solved_intermediates == {15: 0x42}
@@ -98,7 +95,7 @@ class TestSaveByteProgress:
         j = make_job()
         j.initialize_client()
 
-        with patch('blockbuster.blockbuster.saveState') as mock_save:
+        with patch("blockbuster.blockbuster.saveState") as mock_save:
             j._save_byte_progress({}, {}, 15, 1)
         mock_save.assert_called_once_with(j)
 
@@ -129,7 +126,9 @@ class TestPickleRoundTrip:
         j2 = pickle.loads(data)
 
         assert not hasattr(j2, "client") or j2.__dict__.get("client") is None
-        assert not hasattr(j2, "async_client") or j2.__dict__.get("async_client") is None
+        assert (
+            not hasattr(j2, "async_client") or j2.__dict__.get("async_client") is None
+        )
 
     def test_initialize_client_after_unpickle(self):
         j = make_job()

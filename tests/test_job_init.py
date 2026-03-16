@@ -1,15 +1,12 @@
 """Tests for Job.__init__, decryptInit, and encryptInit."""
 
 import base64
-import binascii
 import io
 import sys
-from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 
-from tests.conftest import make_job, JOB_DEFAULTS
+from tests.conftest import make_job
 
 
 class TestJobInit:
@@ -54,8 +51,12 @@ class TestJobInit:
         assert j.block_padding_num is None
 
     def test_custom_values(self):
-        j = make_job(concurrency=50, confirmations=3, redirectDelay=1.5,
-                     plaintextEncoding="utf-16-le")
+        j = make_job(
+            concurrency=50,
+            confirmations=3,
+            redirectDelay=1.5,
+            plaintextEncoding="utf-16-le",
+        )
         assert j.concurrency == 50
         assert j.confirmations == 3
         assert j.redirectDelay == 1.5
@@ -168,7 +169,7 @@ class TestEncryptInit:
         padded = b"A" * 32 + bytes([16] * 16)
         # encryptInit stores blocks as byte slices from bytemap
         assert list(j.blocks[0]) == list(padded[32:48])  # last block
-        assert list(j.blocks[2]) == list(padded[:16])     # first block
+        assert list(j.blocks[2]) == list(padded[:16])  # first block
 
     def test_knownIV(self):
         iv = list(range(16))
@@ -181,8 +182,9 @@ class TestEncryptInit:
             self._init("Test", ivMode="unknown", blocksize=16)
 
     def test_utf16le_encoding(self):
-        j = self._init("AB", ivMode="firstblock", blocksize=16,
-                        plaintextEncoding="utf-16-le")
+        j = self._init(
+            "AB", ivMode="firstblock", blocksize=16, plaintextEncoding="utf-16-le"
+        )
         raw = "AB".encode("utf-16-le")
         assert len(raw) == 4
         assert len(j.bytemap) == 16
@@ -204,23 +206,34 @@ class TestEncryptInit:
         """anchorBlock mode extracts first block of anchorCiphertext as IV."""
         anchor_raw = bytes(range(48))
         anchor_b64 = base64.b64encode(anchor_raw).decode()
-        j = self._init("Test", ivMode="anchorBlock", blocksize=16,
-                        anchorCiphertext=anchor_b64)
+        j = self._init(
+            "Test", ivMode="anchorBlock", blocksize=16, anchorCiphertext=anchor_b64
+        )
         assert j.iv == list(anchor_raw[:16])
 
     def test_anchorBlock_mode_hex(self):
         anchor_raw = bytes(range(48))
         anchor_hex = anchor_raw.hex()
-        j = self._init("Test", ivMode="anchorBlock", blocksize=16,
-                        encodingMode="hex", anchorCiphertext=anchor_hex)
+        j = self._init(
+            "Test",
+            ivMode="anchorBlock",
+            blocksize=16,
+            encodingMode="hex",
+            anchorCiphertext=anchor_hex,
+        )
         assert j.iv == list(anchor_raw[:16])
 
     def test_anchorBlock_mode_base64url(self):
         anchor_raw = bytes(range(48))
         b64 = base64.b64encode(anchor_raw).decode()
         anchor_b64url = b64.replace("+", "-").replace("/", "_").rstrip("=")
-        j = self._init("Test", ivMode="anchorBlock", blocksize=16,
-                        encodingMode="base64Url", anchorCiphertext=anchor_b64url)
+        j = self._init(
+            "Test",
+            ivMode="anchorBlock",
+            blocksize=16,
+            encodingMode="base64Url",
+            anchorCiphertext=anchor_b64url,
+        )
         assert j.iv == list(anchor_raw[:16])
 
 
@@ -241,8 +254,12 @@ class TestInitialize:
         assert j.client is not None
 
     def test_encrypt_initialize(self):
-        j = make_job(sourceString="Test", mode="encrypt", ivMode="firstblock",
-                     oracleMode="search")
+        j = make_job(
+            sourceString="Test",
+            mode="encrypt",
+            ivMode="firstblock",
+            oracleMode="search",
+        )
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
         try:
@@ -273,8 +290,9 @@ class TestDebugMode:
     def test_encrypt_init_knowniv_prints(self):
         """encryptInit with knownIV prints IV info (line 1018)."""
         iv = list(range(16))
-        j = make_job(sourceString="Test", mode="encrypt", ivMode="knownIV",
-                     iv=iv, debug=False)
+        j = make_job(
+            sourceString="Test", mode="encrypt", ivMode="knownIV", iv=iv, debug=False
+        )
         captured = io.StringIO()
         old_stdout = sys.stdout
         sys.stdout = captured

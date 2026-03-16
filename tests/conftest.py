@@ -2,9 +2,7 @@
 
 import base64
 import io
-import os
 import sys
-import asyncio
 
 import httpx
 import pytest
@@ -16,6 +14,7 @@ from blockbuster.blockbuster import Job
 # ---------------------------------------------------------------------------
 # AES-CBC padding oracle simulator
 # ---------------------------------------------------------------------------
+
 
 class PaddingOracle:
     """A simulated AES-CBC padding oracle for deterministic offline testing."""
@@ -55,8 +54,8 @@ class PaddingOracle:
 
 
 # Fixed test key / IV for reproducible tests
-AES_KEY = bytes(range(16))                     # 0x00..0x0f
-AES_IV = bytes(range(16, 32))                  # 0x10..0x1f
+AES_KEY = bytes(range(16))  # 0x00..0x0f
+AES_IV = bytes(range(16, 32))  # 0x10..0x1f
 ORACLE = PaddingOracle(AES_KEY, AES_IV, blocksize=16)
 
 
@@ -130,8 +129,14 @@ def encrypted_hello(oracle):
 # respx-based mock HTTP oracle
 # ---------------------------------------------------------------------------
 
-def _make_oracle_route(oracle_obj, encoding_mode="base64", input_mode="parameter",
-                       vuln_param="token", oracle_text="Invalid padding"):
+
+def _make_oracle_route(
+    oracle_obj,
+    encoding_mode="base64",
+    input_mode="parameter",
+    vuln_param="token",
+    oracle_text="Invalid padding",
+):
     """Return a respx side-effect function that simulates a padding oracle."""
 
     def _handler(request: httpx.Request) -> httpx.Response:
@@ -141,17 +146,19 @@ def _make_oracle_route(oracle_obj, encoding_mode="base64", input_mode="parameter
 
         if input_mode == "parameter":
             from urllib.parse import parse_qs, urlparse
+
             qs = parse_qs(urlparse(url).query)
             token = qs.get(vuln_param, [None])[0]
         elif input_mode == "querystring":
             from urllib.parse import urlparse
+
             token = urlparse(url).query
         elif input_mode == "cookie":
             cookie_header = request.headers.get("cookie", "")
             for part in cookie_header.split(";"):
                 part = part.strip()
                 if part.startswith(vuln_param + "="):
-                    token = part[len(vuln_param) + 1:]
+                    token = part[len(vuln_param) + 1 :]
                     break
 
         if token is None:
@@ -159,6 +166,7 @@ def _make_oracle_route(oracle_obj, encoding_mode="base64", input_mode="parameter
 
         # Decode
         import urllib.parse as up
+
         if encoding_mode == "base64":
             raw = up.unquote_plus(token)
             raw += "=" * (len(raw) % 4)

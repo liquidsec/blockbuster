@@ -5,7 +5,6 @@ import io
 import sys
 import urllib.parse
 
-import pytest
 
 from tests.conftest import make_job
 
@@ -30,7 +29,9 @@ class TestEncodeTokenBase64:
         raw = b"\xfb\xff\xfe"  # produces +//+ in base64
         result = j.encodeToken(raw)
         # Should be raw base64 (no URL encoding)
-        assert "+" in result or "/" in result or result == base64.b64encode(raw).decode()
+        assert (
+            "+" in result or "/" in result or result == base64.b64encode(raw).decode()
+        )
         assert base64.b64decode(result) == raw
 
     def test_cookie_mode_url_encodes(self):
@@ -64,7 +65,7 @@ class TestEncodeTokenBase64Url:
         j = make_job(encodingMode="base64Url")
         # Find bytes that produce + or / in standard base64
         raw = b"\xfb\xef\xbe"  # base64 of this contains + and /
-        standard_b64 = base64.b64encode(raw).decode()
+        base64.b64encode(raw).decode()
         result = j.encodeToken(raw)
         assert "+" not in result
         assert "/" not in result
@@ -106,14 +107,24 @@ class TestEncodeTokenHex:
 # decryptInit decode + block splitting
 # ---------------------------------------------------------------------------
 
+
 class TestDecryptInitDecoding:
     """Test that decryptInit correctly decodes various encoding modes and splits blocks."""
 
-    def _init_job(self, source_string, encoding_mode="base64", iv_mode="firstblock",
-                  blocksize=16, iv=None):
+    def _init_job(
+        self,
+        source_string,
+        encoding_mode="base64",
+        iv_mode="firstblock",
+        blocksize=16,
+        iv=None,
+    ):
         kw = dict(
-            sourceString=source_string, mode="decrypt", encodingMode=encoding_mode,
-            ivMode=iv_mode, blocksize=blocksize,
+            sourceString=source_string,
+            mode="decrypt",
+            encodingMode=encoding_mode,
+            ivMode=iv_mode,
+            blocksize=blocksize,
         )
         if iv is not None:
             kw["iv"] = iv
@@ -186,8 +197,13 @@ class TestDecryptInitDecoding:
         b64 = base64.b64encode(raw).decode()
         stripped = b64.rstrip("=")
         # decryptInit adds padding back
-        j = make_job(sourceString=stripped, mode="decrypt", encodingMode="base64",
-                     ivMode="unknown", blocksize=16)
+        j = make_job(
+            sourceString=stripped,
+            mode="decrypt",
+            encodingMode="base64",
+            ivMode="unknown",
+            blocksize=16,
+        )
         old_stdout = sys.stdout
         sys.stdout = io.StringIO()
         try:

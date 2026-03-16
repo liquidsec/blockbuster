@@ -1,11 +1,7 @@
 """Tests for argument parsing and config validation in async_main."""
 
 import configparser
-import io
 import json
-import os
-import sys
-import tempfile
 
 import pytest
 
@@ -101,11 +97,16 @@ class TestConfigValidation:
     def test_invalid_post_format(self, tmp_path):
         path = self._write_config(tmp_path, {"httpMethod": "POST", "postFormat": "xml"})
         config = self._read_config(path)
-        assert config["default"]["postFormat"] not in ("form-urlencoded", "multipart", "json")
+        assert config["default"]["postFormat"] not in (
+            "form-urlencoded",
+            "multipart",
+            "json",
+        )
 
     def test_invalid_proxy_ip(self):
         """socket.inet_aton should reject invalid IPs."""
         import socket
+
         with pytest.raises(socket.error):
             socket.inet_aton("not.an.ip")
 
@@ -131,12 +132,22 @@ class TestConfigValidation:
         for mode in ("firstblock", "knownIV", "unknown", "anchorBlock"):
             path = self._write_config(tmp_path, {"ivMode": mode})
             config = self._read_config(path)
-            assert config["default"]["ivMode"] in ("firstblock", "knownIV", "unknown", "anchorBlock")
+            assert config["default"]["ivMode"] in (
+                "firstblock",
+                "knownIV",
+                "unknown",
+                "anchorBlock",
+            )
 
     def test_invalid_iv_mode(self, tmp_path):
         path = self._write_config(tmp_path, {"ivMode": "randomIV"})
         config = self._read_config(path)
-        assert config["default"]["ivMode"] not in ("firstblock", "knownIV", "unknown", "anchorBlock")
+        assert config["default"]["ivMode"] not in (
+            "firstblock",
+            "knownIV",
+            "unknown",
+            "anchorBlock",
+        )
 
     def test_knowniv_requires_iv(self, tmp_path):
         """In knownIV mode, iv must be provided, correct length, all ints."""
@@ -146,7 +157,9 @@ class TestConfigValidation:
         assert len(iv) == 0  # Would fail validation
 
     def test_knowniv_iv_length_mismatch(self, tmp_path):
-        path = self._write_config(tmp_path, {"ivMode": "knownIV", "iv": "[1,2,3]", "blocksize": "16"})
+        path = self._write_config(
+            tmp_path, {"ivMode": "knownIV", "iv": "[1,2,3]", "blocksize": "16"}
+        )
         config = self._read_config(path)
         iv = json.loads(config["default"]["iv"])
         blocksize = int(config["default"]["blocksize"])

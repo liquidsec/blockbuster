@@ -1,8 +1,5 @@
 """Tests for URL/body construction across all input/method/format combos."""
 
-import io
-import sys
-import pytest
 from tests.conftest import make_job
 
 
@@ -22,8 +19,11 @@ class TestBuildRequestGET:
         assert "Cookie" in kwargs["headers"]
 
     def test_parameter_mode_with_additionals(self):
-        j = self._job(inputMode="parameter", vulnerableParameter="tok",
-                      additionalParameters={"foo": "bar", "baz": "qux"})
+        j = self._job(
+            inputMode="parameter",
+            vulnerableParameter="tok",
+            additionalParameters={"foo": "bar", "baz": "qux"},
+        )
         _, url, _ = j._buildRequest("AAAA")
         assert "tok=AAAA" in url
         assert "&foo=bar" in url
@@ -43,8 +43,9 @@ class TestBuildRequestGET:
         assert "&x=1" in url
 
     def test_cookie_mode(self):
-        j = self._job(inputMode="cookie", vulnerableParameter="auth",
-                      cookies={"session": "abc"})
+        j = self._job(
+            inputMode="cookie", vulnerableParameter="auth", cookies={"session": "abc"}
+        )
         _, url, kwargs = j._buildRequest("ENCRYPTED")
         # Token should NOT be in URL
         assert "ENCRYPTED" not in url
@@ -68,30 +69,39 @@ class TestBuildRequestPOST:
         return j
 
     def test_form_urlencoded_parameter(self):
-        j = self._job(inputMode="parameter", postFormat="form-urlencoded",
-                      vulnerableParameter="tok")
+        j = self._job(
+            inputMode="parameter",
+            postFormat="form-urlencoded",
+            vulnerableParameter="tok",
+        )
         method, url, kwargs = j._buildRequest("AAAA")
         assert method == "POST"
         assert kwargs["data"]["tok"] == "AAAA"
         assert "application/x-www-form-urlencoded" in kwargs["headers"]["Content-Type"]
 
     def test_form_urlencoded_with_additionals(self):
-        j = self._job(inputMode="parameter", postFormat="form-urlencoded",
-                      vulnerableParameter="tok", additionalParameters={"extra": "val"})
+        j = self._job(
+            inputMode="parameter",
+            postFormat="form-urlencoded",
+            vulnerableParameter="tok",
+            additionalParameters={"extra": "val"},
+        )
         _, _, kwargs = j._buildRequest("CT")
         assert kwargs["data"]["tok"] == "CT"
         assert kwargs["data"]["extra"] == "val"
 
     def test_json_parameter(self):
-        j = self._job(inputMode="parameter", postFormat="json",
-                      vulnerableParameter="tok")
+        j = self._job(
+            inputMode="parameter", postFormat="json", vulnerableParameter="tok"
+        )
         _, _, kwargs = j._buildRequest("AAAA")
         assert kwargs["json"]["tok"] == "AAAA"
         assert "application/json" in kwargs["headers"]["Content-Type"]
 
     def test_multipart_parameter(self):
-        j = self._job(inputMode="parameter", postFormat="multipart",
-                      vulnerableParameter="tok")
+        j = self._job(
+            inputMode="parameter", postFormat="multipart", vulnerableParameter="tok"
+        )
         _, _, kwargs = j._buildRequest("AAAA")
         assert "multipart/form-data" in kwargs["headers"]["Content-Type"]
         assert "tok" in kwargs["data"]  # multipart body contains the field
@@ -103,8 +113,9 @@ class TestBuildRequestPOST:
         assert "?CT_IN_QS" in url
 
     def test_cookie_in_post(self):
-        j = self._job(inputMode="cookie", postFormat="form-urlencoded",
-                      vulnerableParameter="auth")
+        j = self._job(
+            inputMode="cookie", postFormat="form-urlencoded", vulnerableParameter="auth"
+        )
         _, url, kwargs = j._buildRequest("CT")
         assert "auth=CT" in kwargs["headers"]["Cookie"]
         assert "CT" not in url
@@ -114,8 +125,9 @@ class TestMakeRequestCookieHandling:
     """Verify cookie handling doesn't mutate self.cookies."""
 
     def test_cookies_not_mutated(self):
-        j = make_job(inputMode="cookie", vulnerableParameter="auth",
-                     cookies={"session": "abc"})
+        j = make_job(
+            inputMode="cookie", vulnerableParameter="auth", cookies={"session": "abc"}
+        )
         j.initialize_client()
         original_cookies = j.cookies.copy()
         # Just call _buildRequest (which mirrors makeRequest's cookie logic)
