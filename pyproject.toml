@@ -1,5 +1,5 @@
 [project]
-name = "pyoracle2"
+name = "blockbuster"
 version = "1.0.0"
 description = "A python padding oracle vulnerability exploitation tool"
 authors = [
@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-pyoracle2 = "pyoracle2:main"
+blockbuster = "blockbuster:main"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

@@ -9,7 +9,7 @@ import tempfile
 
 import pytest
 
-from pyoracle2.pyoracle2 import handleError
+from blockbuster.blockbuster import handleError
 
 
 class TestConfigValidation:

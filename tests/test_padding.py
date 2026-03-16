@@ -5,7 +5,7 @@ import sys
 
 import pytest
 
-from pyoracle2.pyoracle2 import paddify
+from blockbuster.blockbuster import paddify
 from tests.conftest import make_job
 
 

@@ -1,4 +1,4 @@
-"""Shared fixtures for the pyOracle2 test suite."""
+"""Shared fixtures for the blockbuster test suite."""
 
 import base64
 import io
@@ -11,7 +11,7 @@ import pytest
 import respx
 from Crypto.Cipher import AES
 
-from pyoracle2.pyoracle2 import Job
+from blockbuster.blockbuster import Job
 
 # ---------------------------------------------------------------------------
 # AES-CBC padding oracle simulator

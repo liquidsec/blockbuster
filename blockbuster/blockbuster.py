@@ -1,4 +1,4 @@
-# pyOracle 2.2
+# blockbuster 1.0
 # A python padding oracle vulnerability exploitation tool
 # By Paul Mueller (@paulmmueller)
 
@@ -53,7 +53,7 @@ def split_by_n(seq,n):
 # append message to log files
 def writeToLog(message):
     ts = str(time.time())
-    f = open('pyoracle2.log','a')
+    f = open('blockbuster.log','a')
     f.write(f"{ts}:{message}\n")
     f.close()
 
@@ -82,7 +82,7 @@ def saveState(job):
         currentBlockStr = str(job.currentBlock)
     bytes_done = len(job.block_solved_intermediates)
     byte_suffix = f"-BYTE_{bytes_done}" if bytes_done > 0 and currentBlockStr != "FINAL" else ""
-    outputFileName = f"pyOracleState-{job.name}-BLOCK_{currentBlockStr}{byte_suffix}-{str(int(ts))}.pkl"
+    outputFileName = f"blockbuster-state-{job.name}-BLOCK_{currentBlockStr}{byte_suffix}-{str(int(ts))}.pkl"
     pickleOut = open(outputFileName,"wb")
     pickle.dump(job,pickleOut)
     pickleOut.close()

@@ -1,4 +1,4 @@
-"""Tests for pure utility functions in pyoracle2."""
+"""Tests for pure utility functions in blockbuster."""
 
 import base64
 import os
@@ -7,7 +7,7 @@ import sys
 
 import pytest
 
-from pyoracle2.pyoracle2 import (
+from blockbuster.blockbuster import (
     makeCookieString,
     encode_multipart,
     split_by_n,
@@ -182,7 +182,7 @@ class TestSaveState:
         job = self._make_job()
         job.blockCount = 3
         saveState(job)
-        files = list(tmp_path.glob("pyOracleState-*.pkl"))
+        files = list(tmp_path.glob("blockbuster-state-*.pkl"))
         assert len(files) == 1
 
     def test_filename_contains_block_number(self, tmp_path, monkeypatch):

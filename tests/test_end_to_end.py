@@ -1,7 +1,7 @@
 """End-to-end tests: full decrypt/encrypt against a simulated AES-CBC oracle.
 
 These tests run the actual attack loop with a real (simulated) padding oracle
-backed by pycryptodome AES-CBC, verifying that pyOracle2 can recover known
+backed by pycryptodome AES-CBC, verifying that blockbuster can recover known
 plaintext from ciphertext and produce valid ciphertext from plaintext.
 """
 
@@ -75,7 +75,7 @@ class TestFullDecrypt:
         mock_oracle = make_mock_oracle(ORACLE)
 
         with patch.object(j, 'makeRequest', side_effect=mock_oracle):
-            with patch('pyoracle2.pyoracle2.saveState'):
+            with patch('blockbuster.blockbuster.saveState'):
                 while j.currentBlock < j.blockCount:
                     result = await j.nextBlock()
                     assert result == 0, f"Block {j.currentBlock} failed"
@@ -117,7 +117,7 @@ class TestFullDecrypt:
         mock_oracle = make_mock_oracle(ORACLE)
 
         with patch.object(j, 'makeRequest', side_effect=mock_oracle):
-            with patch('pyoracle2.pyoracle2.saveState'):
+            with patch('blockbuster.blockbuster.saveState'):
                 while j.currentBlock < j.blockCount:
                     result = await j.nextBlock()
                     assert result == 0
@@ -154,7 +154,7 @@ class TestFullDecrypt:
         mock_oracle = make_mock_oracle(ORACLE)
 
         with patch.object(j, 'makeRequest', side_effect=mock_oracle):
-            with patch('pyoracle2.pyoracle2.saveState'):
+            with patch('blockbuster.blockbuster.saveState'):
                 while j.currentBlock < j.blockCount:
                     result = await j.nextBlock()
                     assert result == 0
@@ -190,7 +190,7 @@ class TestFullDecrypt:
         mock_oracle = make_mock_oracle(ORACLE, encoding_mode="hex")
 
         with patch.object(j, 'makeRequest', side_effect=mock_oracle):
-            with patch('pyoracle2.pyoracle2.saveState'):
+            with patch('blockbuster.blockbuster.saveState'):
                 while j.currentBlock < j.blockCount:
                     result = await j.nextBlock()
                     assert result == 0
@@ -231,7 +231,7 @@ class TestFullDecrypt:
         mock_oracle = make_mock_oracle(ORACLE)
 
         with patch.object(j, 'makeRequest', side_effect=mock_oracle):
-            with patch('pyoracle2.pyoracle2.saveState'):
+            with patch('blockbuster.blockbuster.saveState'):
                 while j.currentBlock < j.blockCount:
                     result = await j.nextBlock()
                     assert result == 0
@@ -275,7 +275,7 @@ class TestFullDecrypt:
             return SimpleNamespace(text="Error occurred", status_code=200)
 
         with patch.object(j, 'makeRequest', side_effect=mock_request):
-            with patch('pyoracle2.pyoracle2.saveState'):
+            with patch('blockbuster.blockbuster.saveState'):
                 while j.currentBlock < j.blockCount:
                     result = await j.nextBlock()
                     assert result == 0
@@ -323,7 +323,7 @@ class TestFullDecrypt:
             return mock_request_sync(token, progress)
 
         with patch.object(j, 'makeRequestAsync', side_effect=mock_request_async):
-            with patch('pyoracle2.pyoracle2.saveState'):
+            with patch('blockbuster.blockbuster.saveState'):
                 while j.currentBlock < j.blockCount:
                     result = await j.nextBlock()
                     assert result == 0
@@ -376,7 +376,7 @@ class TestFullEncrypt:
             return SimpleNamespace(text="Invalid padding", status_code=200)
 
         with patch.object(j, 'makeRequest', side_effect=mock_request):
-            with patch('pyoracle2.pyoracle2.saveState'):
+            with patch('blockbuster.blockbuster.saveState'):
                 while j.currentBlock < j.blockCount:
                     result = await j.nextBlock()
                     assert result == 0, f"Block {j.currentBlock} failed"
@@ -425,7 +425,7 @@ class TestMidAttackResume:
         j2.initialize_client()
 
         with patch.object(j2, 'makeRequest', side_effect=mock_oracle):
-            with patch('pyoracle2.pyoracle2.saveState'):
+            with patch('blockbuster.blockbuster.saveState'):
                 while j2.currentBlock < j2.blockCount:
                     result = await j2.nextBlock()
                     assert result == 0
@@ -436,7 +436,7 @@ class TestMidAttackResume:
 
         # Now run with j but verify it produces the same result
         with patch.object(j, 'makeRequest', side_effect=mock_oracle):
-            with patch('pyoracle2.pyoracle2.saveState'):
+            with patch('blockbuster.blockbuster.saveState'):
                 while j.currentBlock < j.blockCount:
                     result = await j.nextBlock()
                     assert result == 0

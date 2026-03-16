@@ -82,7 +82,7 @@ class TestSaveByteProgress:
         intermediates = {15: 0x42}
         values = {15: 0x55}
 
-        with patch('pyoracle2.pyoracle2.saveState'):
+        with patch('blockbuster.blockbuster.saveState'):
             j._save_byte_progress(intermediates, values, 14, 2)
 
         assert j.block_solved_intermediates == {15: 0x42}
@@ -98,7 +98,7 @@ class TestSaveByteProgress:
         j = make_job()
         j.initialize_client()
 
-        with patch('pyoracle2.pyoracle2.saveState') as mock_save:
+        with patch('blockbuster.blockbuster.saveState') as mock_save:
             j._save_byte_progress({}, {}, 15, 1)
         mock_save.assert_called_once_with(j)
 

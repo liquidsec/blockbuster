@@ -1,8 +1,8 @@
-# PyOracle2
+# blockbuster
 
 ![License](https://img.shields.io/badge/license-GPLv3-f126ea.svg)
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
-![Tests](https://github.com/liquidsec/pyOracle2/actions/workflows/tests.yaml/badge.svg?branch=main)
+![Tests](https://github.com/liquidsec/blockbuster/actions/workflows/tests.yaml/badge.svg?branch=main)
 
 A python-based padding oracle exploitation tool.
 
@@ -33,7 +33,7 @@ poetry install
 ## Usage
 
 ```
-usage: pyoracle2 [-h] [-r RESTORE] [-i INPUT] [-m MODE] [-d] [-c CONFIG] [-s INTERMEDIATES]
+usage: blockbuster [-h] [-r RESTORE] [-i INPUT] [-m MODE] [-d] [-c CONFIG] [-s INTERMEDIATES]
 
 optional arguments:
   -h, --help            show this help message and exit
@@ -50,22 +50,22 @@ optional arguments:
                         Pre-seed solved intermediate values. Format: "15:210,14:216"
 ```
 
-PyOracle2 is designed around the creation of a configuration file for each unique job. The goal is to frontload the configuration so that once it is set correctly, exploitation occurs with a concise CLI command.
+Blockbuster is designed around the creation of a configuration file for each unique job. The goal is to frontload the configuration so that once it is set correctly, exploitation occurs with a concise CLI command.
 
 ### Quick Start
 
 ```bash
 # Decrypt mode
-pyoracle2 -m d -i "BASE64_CIPHERTEXT" -c target.ini
+blockbuster -m d -i "BASE64_CIPHERTEXT" -c target.ini
 
 # Encrypt mode
-pyoracle2 -m e -i "plaintext to encrypt" -c target.ini
+blockbuster -m e -i "plaintext to encrypt" -c target.ini
 
 # Resume a saved state
-pyoracle2 -r pyOracleState-job-BLOCK_2-1710000000.pkl
+blockbuster -r blockbuster-state-job-BLOCK_2-1710000000.pkl
 
 # Resume with pre-seeded intermediates from a previous run
-pyoracle2 -r pyOracleState-job-BLOCK_2-1710000000.pkl -s "15:210,14:55,13:128"
+blockbuster -r blockbuster-state-job-BLOCK_2-1710000000.pkl -s "15:210,14:55,13:128"
 ```
 
 ## Configuration

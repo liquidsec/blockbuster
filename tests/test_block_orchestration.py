@@ -137,7 +137,7 @@ class TestBlockRetryLogic:
         block_failures = 0
 
         with patch.object(j, 'nextBlock', side_effect=mock_next_block):
-            with patch('pyoracle2.pyoracle2.saveState'):
+            with patch('blockbuster.blockbuster.saveState'):
                 while j.currentBlock < j.blockCount:
                     result = await j.nextBlock()
                     if result == 0:
